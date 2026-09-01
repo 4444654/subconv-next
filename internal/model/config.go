@@ -48,6 +48,9 @@ type ServiceConfig struct {
 	PublicBaseURL                    string `json:"public_base_url,omitempty"`
 	AccessToken                      string `json:"access_token,omitempty"`
 	SubscriptionToken                string `json:"subscription_token,omitempty"`
+	PublicConverter                  bool   `json:"public_converter,omitempty"`
+	TrustProxyHeaders                bool   `json:"trust_proxy_headers,omitempty"`
+	AllowInsecurePublic              bool   `json:"allow_insecure_public,omitempty"`
 	MaxSubscriptionBytes             int    `json:"max_subscription_bytes"`
 	FetchTimeoutSeconds              int    `json:"fetch_timeout_seconds"`
 	AllowLAN                         bool   `json:"allow_lan"`

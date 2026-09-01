@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -196,6 +197,18 @@ func runServe(args []string, stderr io.Writer) int {
 		_, _ = fmt.Fprintf(stderr, "serve: %v\n", err)
 		return 2
 	}
+	if err := config.Validate(cfg); err != nil {
+		_, _ = fmt.Fprintf(stderr, "serve: invalid configuration after overrides: %v\n", err)
+		return 2
+	}
+	if err := validateServeSecurity(cfg); err != nil {
+		_, _ = fmt.Fprintf(stderr, "serve: %v\n", err)
+		return 2
+	}
+	if err := secureRuntimeData(filepath.Dir(cfg.Service.StatePath)); err != nil {
+		_, _ = fmt.Fprintf(stderr, "serve: secure data directory: %v\n", err)
+		return 1
+	}
 
 	server := api.NewServer(version, cfg)
 	httpServer := &http.Server{
@@ -243,11 +256,15 @@ func runServe(args []string, stderr io.Writer) int {
 }
 
 type serveOverrides struct {
-	host          string
-	port          int
-	dataDir       string
-	publicBaseURL string
-	logLevel      string
+	host                string
+	port                int
+	dataDir             string
+	publicBaseURL       string
+	logLevel            string
+	accessToken         string
+	publicConverter     *bool
+	trustProxyHeaders   *bool
+	allowInsecurePublic *bool
 }
 
 func loadServeConfig(path string) (model.Config, error) {
@@ -270,13 +287,46 @@ func serveOverridesFromEnvAndFlags(explicitFlags map[string]bool, flags serveOve
 		}
 		envPort = parsed
 	}
+	publicConverter, err := boolOverrideFromEnv("SUBCONV_PUBLIC_CONVERTER")
+	if err != nil {
+		return serveOverrides{}, err
+	}
+	trustProxyHeaders, err := boolOverrideFromEnv("SUBCONV_TRUST_PROXY_HEADERS")
+	if err != nil {
+		return serveOverrides{}, err
+	}
+	allowInsecurePublic, err := boolOverrideFromEnv("SUBCONV_ALLOW_INSECURE_PUBLIC")
+	if err != nil {
+		return serveOverrides{}, err
+	}
 	return serveOverrides{
-		host:          stringOverride("SUBCONV_HOST", flags.host, explicitFlags["host"]),
-		port:          intOverride(envPort, flags.port, explicitFlags["port"]),
-		dataDir:       stringOverride("SUBCONV_DATA_DIR", flags.dataDir, explicitFlags["data-dir"]),
-		publicBaseURL: stringOverride("SUBCONV_PUBLIC_BASE_URL", flags.publicBaseURL, explicitFlags["public-base-url"]),
-		logLevel:      stringOverride("SUBCONV_LOG_LEVEL", flags.logLevel, explicitFlags["log-level"]),
+		host:                stringOverride("SUBCONV_HOST", flags.host, explicitFlags["host"]),
+		port:                intOverride(envPort, flags.port, explicitFlags["port"]),
+		dataDir:             stringOverride("SUBCONV_DATA_DIR", flags.dataDir, explicitFlags["data-dir"]),
+		publicBaseURL:       stringOverride("SUBCONV_PUBLIC_BASE_URL", flags.publicBaseURL, explicitFlags["public-base-url"]),
+		logLevel:            stringOverride("SUBCONV_LOG_LEVEL", flags.logLevel, explicitFlags["log-level"]),
+		accessToken:         strings.TrimSpace(os.Getenv("SUBCONV_ACCESS_TOKEN")),
+		publicConverter:     publicConverter,
+		trustProxyHeaders:   trustProxyHeaders,
+		allowInsecurePublic: allowInsecurePublic,
 	}, nil
+}
+
+func boolOverrideFromEnv(name string) (*bool, error) {
+	raw, exists := os.LookupEnv(name)
+	if !exists || strings.TrimSpace(raw) == "" {
+		return nil, nil
+	}
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "true":
+		value := true
+		return &value, nil
+	case "false":
+		value := false
+		return &value, nil
+	default:
+		return nil, fmt.Errorf("%s must be true or false", name)
+	}
 }
 
 func parseOptionalEnvPort(key string) (int, error) {
@@ -325,6 +375,19 @@ func applyServeOverrides(cfg *model.Config, overrides serveOverrides) error {
 	if value := strings.TrimRight(strings.TrimSpace(overrides.publicBaseURL), "/"); value != "" {
 		cfg.Service.PublicBaseURL = value
 	}
+	if value := strings.TrimSpace(overrides.accessToken); value != "" {
+		cfg.Service.AccessToken = value
+		cfg.Service.SubscriptionToken = value
+	}
+	if overrides.publicConverter != nil {
+		cfg.Service.PublicConverter = *overrides.publicConverter
+	}
+	if overrides.trustProxyHeaders != nil {
+		cfg.Service.TrustProxyHeaders = *overrides.trustProxyHeaders
+	}
+	if overrides.allowInsecurePublic != nil {
+		cfg.Service.AllowInsecurePublic = *overrides.allowInsecurePublic
+	}
 	if value := strings.TrimSpace(overrides.dataDir); value != "" {
 		if !filepath.IsAbs(value) {
 			return fmt.Errorf("--data-dir must be an absolute path")
@@ -334,6 +397,55 @@ func applyServeOverrides(cfg *model.Config, overrides serveOverrides) error {
 		cfg.Service.OutputPath = filepath.Join(value, "mihomo.yaml")
 	}
 	return nil
+}
+
+func validateServeSecurity(cfg model.Config) error {
+	if cfg.Service.AllowInsecurePublic {
+		return nil
+	}
+	host := strings.Trim(strings.TrimSpace(cfg.Service.ListenAddr), "[]")
+	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+		return nil
+	}
+	if strings.EqualFold(host, "localhost") {
+		return nil
+	}
+	token := strings.TrimSpace(cfg.Service.AccessToken)
+	if token == "" {
+		token = strings.TrimSpace(cfg.Service.SubscriptionToken)
+	}
+	if token == "" {
+		return fmt.Errorf("SUBCONV_ACCESS_TOKEN is required for a non-loopback listener; set SUBCONV_ALLOW_INSECURE_PUBLIC=true only for an explicitly insecure local preview")
+	}
+	if token != "" && len(token) < 24 {
+		return fmt.Errorf("SUBCONV_ACCESS_TOKEN must contain at least 24 characters for a non-loopback listener")
+	}
+	return nil
+}
+
+func secureRuntimeData(root string) error {
+	root = filepath.Clean(strings.TrimSpace(root))
+	if root == "." || !filepath.IsAbs(root) {
+		return errors.New("data directory must be an absolute path")
+	}
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		return err
+	}
+	return filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			return nil
+		}
+		if entry.IsDir() {
+			return os.Chmod(path, 0o700)
+		}
+		if entry.Type().IsRegular() {
+			return os.Chmod(path, 0o600)
+		}
+		return nil
+	})
 }
 
 func runParse(args []string, stdout, stderr io.Writer) int {

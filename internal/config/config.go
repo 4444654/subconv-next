@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -298,6 +299,9 @@ func Validate(cfg model.Config) error {
 	}
 	if cfg.Service.FetchTimeoutSeconds < 1 {
 		return fmt.Errorf("service.fetch_timeout_seconds must be >= 1")
+	}
+	if err := validatePublicBaseURL(cfg.Service.PublicBaseURL); err != nil {
+		return fmt.Errorf("service.public_base_url: %w", err)
 	}
 	if !isAllowedTemplate(cfg.Service.Template) {
 		return fmt.Errorf("service.template must be one of lite, standard, full")
@@ -739,4 +743,25 @@ func validateSubscriptionURL(raw string) error {
 	default:
 		return fmt.Errorf("must use http or https scheme")
 	}
+}
+
+func validatePublicBaseURL(raw string) error {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return nil
+	}
+	parsed, err := url.Parse(value)
+	if err != nil {
+		return fmt.Errorf("must be a valid URL")
+	}
+	if !strings.EqualFold(parsed.Scheme, "http") && !strings.EqualFold(parsed.Scheme, "https") {
+		return fmt.Errorf("must use http or https scheme")
+	}
+	if parsed.Hostname() == "" || parsed.User != nil {
+		return fmt.Errorf("must include a host and no URL credentials")
+	}
+	if parsed.RawQuery != "" || parsed.Fragment != "" {
+		return fmt.Errorf("must not include a query or fragment")
+	}
+	return nil
 }

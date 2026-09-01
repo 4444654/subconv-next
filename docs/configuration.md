@@ -54,6 +54,10 @@ subconv-next generate
 | `SUBCONV_DATA_DIR` | `/data` | Runtime data directory. |
 | `SUBCONV_PUBLIC_BASE_URL` | empty | Public origin used in generated subscription links. |
 | `SUBCONV_LOG_LEVEL` | `info` | Service and renderer log level. |
+| `SUBCONV_ACCESS_TOKEN` | empty | Management password and API token. Required and at least 24 characters on every non-loopback listener, including the default Docker listener. |
+| `SUBCONV_PUBLIC_CONVERTER` | `false` | Allow anonymous access to the workspace-isolated converter UI and approved converter APIs. |
+| `SUBCONV_TRUST_PROXY_HEADERS` | `false` | Trust proxy-provided client IP headers for in-process rate limits; only use behind a private trusted proxy. |
+| `SUBCONV_ALLOW_INSECURE_PUBLIC` | `false` | Explicitly disable management authentication. Preview use only. |
 
 Example:
 
@@ -63,6 +67,8 @@ SUBCONV_PORT=9876 \
 SUBCONV_DATA_DIR=/data \
 SUBCONV_PUBLIC_BASE_URL=https://subconv.example.com \
 SUBCONV_LOG_LEVEL=info \
+SUBCONV_ACCESS_TOKEN=replace-with-a-long-random-token \
+SUBCONV_PUBLIC_CONVERTER=true \
 subconv-next serve --config /config/config.json
 ```
 
@@ -115,8 +121,9 @@ services:
     container_name: subconv-next
     restart: unless-stopped
     ports:
-      - "9876:9876"
+      - "127.0.0.1:9876:9876"
     volumes:
+      - ./config:/config:ro
       - ./data:/data
     environment:
       SUBCONV_HOST: 0.0.0.0
@@ -124,6 +131,7 @@ services:
       SUBCONV_DATA_DIR: /data
       SUBCONV_PUBLIC_BASE_URL: ""
       SUBCONV_LOG_LEVEL: info
+      SUBCONV_ACCESS_TOKEN: ${SUBCONV_ACCESS_TOKEN:-}
 ```
 
 See [docker.md](docker.md) for Docker-specific deployment, health check, backup, and multi-arch build steps.

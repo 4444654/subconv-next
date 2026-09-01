@@ -22,17 +22,30 @@ import (
 type Server struct {
 	version string
 
-	mu              sync.RWMutex
-	config          model.Config
-	status          model.RuntimeStatus
-	logLines        []string
-	workspaceStatus map[string]model.RuntimeStatus
-	workspaceLogs   map[string][]string
-	logWriteMu      sync.Mutex
+	mu                sync.RWMutex
+	config            model.Config
+	status            model.RuntimeStatus
+	logLines          []string
+	workspaceStatus   map[string]model.RuntimeStatus
+	workspaceLogs     map[string][]string
+	workspaceCreateMu sync.Mutex
+	workspaceMetaMu   sync.Mutex
+	workspaceLocks    workspaceLockManager
+	maxWorkspaces     int
+	publishedCreateMu sync.Mutex
+	maxPublications   int
+	logWriteMu        sync.Mutex
 
-	refreshMu      sync.Mutex
-	refreshRunning bool
-	refreshDone    chan struct{}
+	refreshMu    sync.Mutex
+	refreshRuns  map[string]chan struct{}
+	refreshSlots chan struct{}
+
+	publishedMetaMu      sync.Mutex
+	publishedIndexMu     sync.RWMutex
+	publishedTokenIndex  map[string]string
+	publishedIndexLoaded bool
+	publishedAccessMu    sync.Mutex
+	publishedAccess      map[string]*publishedAccessState
 
 	siteLogoMu    sync.RWMutex
 	siteLogoCache map[string]siteLogoCacheEntry
@@ -59,15 +72,24 @@ func NewServer(version string, cfg model.Config) *Server {
 			YAMLExists:               yamlFileExists(cfg.Service.OutputPath),
 			YAMLUpdatedAt:            yamlFileUpdatedAt(cfg.Service.OutputPath),
 		},
-		siteLogoCache:   map[string]siteLogoCacheEntry{},
-		workspaceStatus: map[string]model.RuntimeStatus{},
-		workspaceLogs:   map[string][]string{},
+		siteLogoCache:       map[string]siteLogoCacheEntry{},
+		workspaceStatus:     map[string]model.RuntimeStatus{},
+		workspaceLogs:       map[string][]string{},
+		refreshRuns:         map[string]chan struct{}{},
+		refreshSlots:        make(chan struct{}, maxConcurrentRefreshes),
+		maxWorkspaces:       256,
+		maxPublications:     256,
+		publishedTokenIndex: map[string]string{},
+		publishedAccess:     map[string]*publishedAccessState{},
 	}
 }
 
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", s.handleHealthz)
+	mux.HandleFunc("/api/auth/session", s.handleAuthSession)
+	mux.HandleFunc("/api/auth/login", s.handleAuthLogin)
+	mux.HandleFunc("/api/auth/logout", s.handleAuthLogout)
 	mux.HandleFunc("/api/status", s.handleStatus)
 	mux.HandleFunc("/api/workspaces", s.handleWorkspaces)
 	mux.HandleFunc("/api/workspaces/", s.handleWorkspaceSubroutes)
@@ -98,8 +120,18 @@ func (s *Server) Handler() http.Handler {
 	})
 	mux.HandleFunc("/style.css", serveEmbeddedAsset("style.css", "text/css; charset=utf-8"))
 	mux.HandleFunc("/app.js", serveEmbeddedAsset("app.js", "application/javascript; charset=utf-8"))
+	mux.HandleFunc("/login.css", serveEmbeddedAsset("login.css", "text/css; charset=utf-8"))
+	mux.HandleFunc("/login.js", serveEmbeddedAsset("login.js", "application/javascript; charset=utf-8"))
+	mux.HandleFunc("/login", s.handleLoginPage)
+	mux.HandleFunc("/login.html", func(w http.ResponseWriter, r *http.Request) {
+		if s.snapshotConfig().Service.PublicConverter {
+			http.Redirect(w, r, "/", http.StatusFound)
+			return
+		}
+		http.Redirect(w, r, "/login", http.StatusMovedPermanently)
+	})
 	mux.HandleFunc("/", serveIndex)
-	return mux
+	return s.recoveryMiddleware(s.securityMiddleware(s.workspaceLockMiddleware(mux)))
 }
 
 func ListenAddress(cfg model.Config) string {
@@ -253,18 +285,19 @@ func (s *Server) writeLogLine(line string) {
 	defer s.logWriteMu.Unlock()
 
 	dir := s.logsDir()
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return
 	}
 	path := filepath.Join(dir, "app.log")
 	if err := rotateLogFile(path, int64(len(line)+1)); err != nil {
 		return
 	}
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		return
 	}
 	defer file.Close()
+	_ = file.Chmod(0o600)
 	_, _ = file.WriteString(line + "\n")
 }
 
@@ -343,6 +376,7 @@ func formatTime(t time.Time) string {
 }
 
 func writeAPIError(w http.ResponseWriter, statusCode int, code, message string) {
+	message = maskSensitiveText(message)
 	writeJSON(w, statusCode, map[string]any{
 		"ok": false,
 		"error": map[string]string{
@@ -362,6 +396,34 @@ func serveIndex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	serveEmbeddedAsset("index.html", "text/html; charset=utf-8")(w, r)
+}
+
+func (s *Server) handleLoginPage(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/login" {
+		http.NotFound(w, r)
+		return
+	}
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		methodNotAllowed(w, http.MethodGet+", "+http.MethodHead)
+		return
+	}
+	if s.snapshotConfig().Service.PublicConverter {
+		http.Redirect(w, r, "/", http.StatusFound)
+		return
+	}
+	serveEmbeddedAsset("login.html", "text/html; charset=utf-8")(w, r)
+}
+
+func (s *Server) recoveryMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				s.appendLog(fmt.Sprintf("request panic recovered: %v", recovered))
+				writeAPIError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "request failed unexpectedly")
+			}
+		}()
+		next.ServeHTTP(w, r)
+	})
 }
 
 func serveEmbeddedAsset(name, contentType string) http.HandlerFunc {
@@ -413,7 +475,18 @@ func maskSensitiveText(value string) string {
 	masked = secretPairPattern.ReplaceAllStringFunc(masked, maskSecretPair)
 	masked = maskHeaderValue(masked, "authorization")
 	masked = maskHeaderValue(masked, "cookie")
-	return masked
+	return truncateLogText(masked, 2048)
+}
+
+func truncateLogText(value string, limit int) string {
+	if limit <= 0 {
+		return ""
+	}
+	runes := []rune(value)
+	if len(runes) <= limit {
+		return value
+	}
+	return string(runes[:limit]) + "… <truncated>"
 }
 
 func maskSecretPair(input string) string {

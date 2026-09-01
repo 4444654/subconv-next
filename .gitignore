@@ -7,6 +7,7 @@ checksums.txt
 HANDOFF.md
 IMPLEMENTATION*.md
 /artifacts/
+.env
 subconv-next-linux-*
 .tmpinspect/
 !openwrt/

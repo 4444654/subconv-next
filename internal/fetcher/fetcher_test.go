@@ -210,6 +210,46 @@ func TestFetchBlocksPrivateHostsByDefault(t *testing.T) {
 	}
 }
 
+func TestFetchRejectsURLCredentials(t *testing.T) {
+	f := New(Options{CacheDir: t.TempDir()})
+
+	_, _, err := f.Fetch(context.Background(), Source{
+		Name:    "credentials",
+		URL:     "https://user:password@example.com/subscription",
+		Enabled: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "credentials") {
+		t.Fatalf("Fetch() error = %v, want URL credentials error", err)
+	}
+}
+
+func TestPublicModeRejectsNonWebPortsBeforeDNS(t *testing.T) {
+	f := New(Options{
+		CacheDir:   t.TempDir(),
+		PublicMode: true,
+		Resolver: staticResolver{
+			ips: []net.IPAddr{{IP: net.ParseIP("8.8.8.8")}},
+		},
+	})
+	_, _, err := f.Fetch(context.Background(), Source{
+		Name:    "blocked-port",
+		URL:     "https://example.com:22/subscription",
+		Enabled: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "outbound port 22") {
+		t.Fatalf("Fetch() error = %v, want public port rejection", err)
+	}
+}
+
+func TestValidatePublicURLAllowsCommonAlternateHTTPSPort(t *testing.T) {
+	if err := ValidatePublicURL("https://example.com:8443/subscription"); err != nil {
+		t.Fatalf("ValidatePublicURL(8443) error = %v", err)
+	}
+	if err := ValidatePublicURL("http://example.com:6379/subscription"); err == nil {
+		t.Fatal("ValidatePublicURL(6379) error = nil, want rejection")
+	}
+}
+
 func TestFetchAllowsPrivateHostWhenSourceAllowsLAN(t *testing.T) {
 	f := New(Options{
 		CacheDir:     t.TempDir(),
@@ -324,7 +364,14 @@ func TestBlockedIP(t *testing.T) {
 		{ip: "127.0.0.1", want: true},
 		{ip: "10.0.0.1", want: true},
 		{ip: "192.168.1.10", want: true},
+		{ip: "100.64.0.1", want: true},
+		{ip: "192.0.2.1", want: true},
+		{ip: "198.18.0.1", want: true},
+		{ip: "203.0.113.1", want: true},
+		{ip: "64:ff9b::a00:1", want: true},
+		{ip: "2002:0a00:0001::", want: true},
 		{ip: "8.8.8.8", want: false},
+		{ip: "2606:4700:4700::1111", want: false},
 	}
 
 	for _, tt := range tests {
@@ -336,6 +383,44 @@ func TestBlockedIP(t *testing.T) {
 
 func netParseIP(value string) net.IP {
 	return net.ParseIP(value)
+}
+
+func TestPublicHostResolverBypassesFakeIPDNS(t *testing.T) {
+	resolver := publicHostResolver{
+		primary: staticResolver{
+			ips: []net.IPAddr{{IP: net.ParseIP("198.18.0.125")}},
+		},
+		fallbacks: []HostResolver{
+			staticResolver{ips: []net.IPAddr{{IP: net.ParseIP("104.21.73.232")}}},
+		},
+	}
+
+	ips, err := resolver.LookupIPAddr(context.Background(), "example.com")
+	if err != nil {
+		t.Fatalf("LookupIPAddr() error = %v", err)
+	}
+	if len(ips) != 1 || !ips[0].IP.Equal(net.ParseIP("104.21.73.232")) {
+		t.Fatalf("LookupIPAddr() = %#v, want public fallback address", ips)
+	}
+}
+
+func TestPublicHostResolverKeepsSafePrimaryResult(t *testing.T) {
+	resolver := publicHostResolver{
+		primary: staticResolver{
+			ips: []net.IPAddr{{IP: net.ParseIP("8.8.8.8")}},
+		},
+		fallbacks: []HostResolver{
+			staticResolver{ips: []net.IPAddr{{IP: net.ParseIP("1.1.1.1")}}},
+		},
+	}
+
+	ips, err := resolver.LookupIPAddr(context.Background(), "example.com")
+	if err != nil {
+		t.Fatalf("LookupIPAddr() error = %v", err)
+	}
+	if len(ips) != 1 || !ips[0].IP.Equal(net.ParseIP("8.8.8.8")) {
+		t.Fatalf("LookupIPAddr() = %#v, want primary address", ips)
+	}
 }
 
 type staticResolver struct {

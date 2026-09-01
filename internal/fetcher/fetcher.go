@@ -61,6 +61,7 @@ type Options struct {
 	MaxRedirects      int
 	CacheTTL          time.Duration
 	AllowPrivateHosts bool
+	PublicMode        bool
 	Resolver          HostResolver
 	RequestDoer       RequestDoer
 }
@@ -83,6 +84,7 @@ func OptionsFromConfig(cfg model.Config) Options {
 		MaxRedirects:      3,
 		CacheTTL:          time.Duration(cfg.Service.RefreshInterval) * time.Second,
 		AllowPrivateHosts: cfg.Service.AllowLAN,
+		PublicMode:        cfg.Service.PublicConverter,
 	}
 }
 
@@ -97,9 +99,72 @@ func New(opts Options) *Fetcher {
 		opts.MaxRedirects = 3
 	}
 	if opts.Resolver == nil {
-		opts.Resolver = net.DefaultResolver
+		if opts.PublicMode {
+			opts.Resolver = newPublicHostResolver(net.DefaultResolver)
+		} else {
+			opts.Resolver = net.DefaultResolver
+		}
 	}
 	return &Fetcher{opts: opts}
+}
+
+type publicHostResolver struct {
+	primary   HostResolver
+	fallbacks []HostResolver
+}
+
+func newPublicHostResolver(primary HostResolver) HostResolver {
+	if primary == nil {
+		primary = net.DefaultResolver
+	}
+	return publicHostResolver{
+		primary: primary,
+		fallbacks: []HostResolver{
+			newDirectDNSResolver("1.1.1.1:53"),
+			newDirectDNSResolver("8.8.8.8:53"),
+		},
+	}
+}
+
+func newDirectDNSResolver(address string) HostResolver {
+	return &net.Resolver{
+		PreferGo:     true,
+		StrictErrors: false,
+		Dial: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			dialer := &net.Dialer{Timeout: 2 * time.Second}
+			return dialer.DialContext(ctx, "udp", address)
+		},
+	}
+}
+
+func (resolver publicHostResolver) LookupIPAddr(ctx context.Context, host string) ([]net.IPAddr, error) {
+	primaryIPs, primaryErr := resolver.primary.LookupIPAddr(ctx, host)
+	if containsPublicIP(primaryIPs) {
+		return primaryIPs, nil
+	}
+
+	for _, fallback := range resolver.fallbacks {
+		lookupCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		fallbackIPs, err := fallback.LookupIPAddr(lookupCtx, host)
+		cancel()
+		if err == nil && containsPublicIP(fallbackIPs) {
+			return fallbackIPs, nil
+		}
+	}
+
+	if primaryErr != nil {
+		return nil, primaryErr
+	}
+	return primaryIPs, nil
+}
+
+func containsPublicIP(ips []net.IPAddr) bool {
+	for _, ipAddr := range ips {
+		if !isBlockedIP(ipAddr.IP) {
+			return true
+		}
+	}
+	return false
 }
 
 func (f *Fetcher) Fetch(ctx context.Context, source Source) (FetchedSubscription, []string, error) {
@@ -155,6 +220,9 @@ func (f *Fetcher) fetchNetwork(ctx context.Context, currentURL *url.URL, source 
 	redirects := 0
 
 	for {
+		if f.opts.PublicMode && !publicFetchPortAllowed(currentURL) {
+			return FetchedSubscription{}, fmt.Errorf("outbound port %s is not allowed in public converter mode", effectivePort(currentURL))
+		}
 		resolvedIP, err := f.resolveHost(ctx, currentURL.Hostname(), source.AllowPrivateHosts)
 		if err != nil {
 			return FetchedSubscription{}, err
@@ -306,7 +374,7 @@ func (f *Fetcher) writeCache(rawURL string, fetched FetchedSubscription) error {
 	}
 
 	bodyPath, metaPath := cachePaths(f.opts.CacheDir, rawURL)
-	if err := storage.AtomicWriteFile(bodyPath, fetched.Content, 0o644); err != nil {
+	if err := storage.AtomicWriteFile(bodyPath, fetched.Content, 0o600); err != nil {
 		return err
 	}
 
@@ -325,7 +393,7 @@ func (f *Fetcher) writeCache(rawURL string, fetched FetchedSubscription) error {
 	}
 	data = append(data, '\n')
 
-	return storage.AtomicWriteFile(metaPath, data, 0o644)
+	return storage.AtomicWriteFile(metaPath, data, 0o600)
 }
 
 func cachePaths(cacheDir, rawURL string) (string, string) {
@@ -349,7 +417,43 @@ func validateFetchURL(raw string) (*url.URL, error) {
 	if parsed.Hostname() == "" {
 		return nil, fmt.Errorf("missing host")
 	}
+	if parsed.User != nil {
+		return nil, fmt.Errorf("url credentials are not allowed")
+	}
 	return parsed, nil
+}
+
+// ValidatePublicURL applies the public converter's outbound Web-port policy.
+// DNS and IP safety are checked immediately before each network dial.
+func ValidatePublicURL(raw string) error {
+	parsed, err := validateFetchURL(raw)
+	if err != nil {
+		return err
+	}
+	if !publicFetchPortAllowed(parsed) {
+		return fmt.Errorf("outbound port %s is not allowed in public converter mode", effectivePort(parsed))
+	}
+	return nil
+}
+
+func publicFetchPortAllowed(target *url.URL) bool {
+	if target == nil {
+		return false
+	}
+	port := effectivePort(target)
+	switch strings.ToLower(strings.TrimSpace(target.Scheme)) {
+	case "http":
+		switch port {
+		case "80", "8080", "8880", "2052", "2082", "2086", "2095":
+			return true
+		}
+	case "https":
+		switch port {
+		case "443", "8443", "2053", "2083", "2087", "2096":
+			return true
+		}
+	}
+	return false
 }
 
 func effectivePort(target *url.URL) string {

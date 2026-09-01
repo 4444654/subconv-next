@@ -326,7 +326,7 @@ const OUTPUT_OPTION_GROUPS = [
 ];
 
 const svgIcon = (body) =>
-  `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${body}</svg>`;
+  `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">${body}</svg>`;
 
 const ICONS = {
   settings: svgIcon(
@@ -410,6 +410,9 @@ const ICONS = {
   ),
   lock: svgIcon(
     '<rect x="3" y="11" width="18" height="10" rx="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path>',
+  ),
+  logout: svgIcon(
+    '<path d="M10 17l5-5-5-5"></path><path d="M15 12H3"></path><path d="M15 4h4a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-4"></path>',
   ),
   home: svgIcon(
     '<path d="M3 10.5 12 3l9 7.5"></path><path d="M5 10v10h14V10"></path>',
@@ -619,6 +622,9 @@ const SOURCE_PREFIX_MODES = [
 const CHINA_TIME_ZONE = "Asia/Shanghai";
 
 const state = {
+  authRequired: false,
+  publicConverter: false,
+  csrfToken: "",
   config: null,
   activeWorkspace: "config",
   activeSourceMode: "rules",
@@ -636,6 +642,7 @@ const state = {
   localDraftMeta: null,
   localDraftPayload: null,
   generateStatus: "idle",
+  generationInFlight: false,
   refreshStatus: "idle",
   refreshStage: "",
   generateProgressTimer: null,
@@ -737,6 +744,8 @@ function decorateButtons() {
     ["view-generated-link-btn", "link"],
     ["rotate-token-btn", "refresh"],
     ["delete-published-btn", "trash"],
+    ["review-error-source-btn", "settings"],
+    ["open-error-diagnostics-btn", "terminal"],
     ["refresh-nodes-btn", "refresh"],
     ["refresh-yaml-btn", "refresh"],
     ["copy-yaml-btn", "copy"],
@@ -772,6 +781,7 @@ function setButtonIconText(target, text) {
 }
 
 async function init() {
+  if (!(await loadAuthSession())) return;
   setValue("backend-origin", window.location.origin);
   updateGeneratedUrlPlaceholder();
   renderResult(false);
@@ -813,11 +823,28 @@ function bindEvents() {
   document
     .getElementById("delete-published-btn")
     .addEventListener("click", deletePublishedLink);
+  document
+    .getElementById("review-error-source-btn")
+    .addEventListener("click", focusSubscriptionSources);
+  document
+    .getElementById("open-error-diagnostics-btn")
+    .addEventListener("click", () => switchWorkspace("diagnostics"));
+  document
+    .getElementById("action-result-status")
+    .addEventListener("click", focusGenerationError);
+  document
+    .getElementById("action-result-status")
+    .addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      focusGenerationError();
+    });
   document.getElementById("version-badge").addEventListener("click", () => {
     if (state.updateCheck.updateAvailable && state.updateCheck.releaseUrl) {
       openUrl(state.updateCheck.releaseUrl);
     }
   });
+  document.getElementById("logout-btn").addEventListener("click", logoutManagementSession);
 
   document
     .getElementById("add-subscription-btn")
@@ -1101,8 +1128,8 @@ function bindEvents() {
     }
   });
   window.addEventListener("resize", () => {
-    if (!state.activeEmojiPopover) return;
-    closeEmojiPopover();
+    if (state.activeEmojiPopover) closeEmojiPopover();
+    syncYamlGutter();
   });
   window.addEventListener(
     "scroll",
@@ -1176,6 +1203,10 @@ function switchWorkspace(workspace) {
   } else if (workspace === "diagnostics") {
     refreshDiagnostics();
   }
+
+  if (window.scrollY > 0) {
+    window.scrollTo({ top: 0, behavior: "auto" });
+  }
 }
 
 function applyDefaultState() {
@@ -1222,6 +1253,7 @@ function applyDefaultState() {
   state.localDraftMeta = null;
   state.localDraftPayload = null;
   state.generateStatus = "idle";
+  state.generationInFlight = false;
   state.refreshStatus = "idle";
   state.lastError = "";
   state.publishNotice = "";
@@ -1315,14 +1347,17 @@ function renderSessionBanner() {
   const mode = state.draftMode || "privacy";
   const meta = state.localDraftMeta;
   const draftCount = loadLocalDrafts().length;
-  let title = "当前模式：隐私会话";
-  let description = "刷新页面后不会自动保留配置。";
-  let metaLine = "默认不会自动保存或自动恢复配置。";
+  let title = "隐私会话";
+  let description = "配置仅保留在当前页面，刷新后自动清除。";
+  let metaLine = "";
+  const restorePublishedButton = state.publicConverter
+    ? ""
+    : '<button id="restore-published-link-btn" class="secondary-button small-button" type="button">从订阅链接恢复</button>';
   let buttons = `
-    <button id="save-local-draft-btn" class="ghost-button small-button" type="button">保存为本机草稿</button>
+    <button id="save-local-draft-btn" class="ghost-button small-button" type="button">保存草稿</button>
     ${draftCount ? '<button id="manage-local-drafts-btn" class="ghost-button small-button" type="button">管理草稿</button>' : ""}
-    <button id="restore-published-link-btn" class="secondary-button small-button" type="button">从订阅链接恢复</button>
-    <button id="clear-session-btn" class="danger-ghost-button small-button" type="button">清空当前会话</button>
+    ${restorePublishedButton}
+    <button id="clear-session-btn" class="danger-ghost-button small-button" type="button">清空会话</button>
   `;
 
   if (mode === "draft_detected") {
@@ -1332,7 +1367,7 @@ function renderSessionBanner() {
     buttons = `
       <button id="restore-draft-btn" class="secondary-button small-button" type="button">${draftCount > 1 ? "恢复最近草稿" : "恢复草稿"}</button>
       <button id="manage-local-drafts-btn" class="ghost-button small-button" type="button">管理草稿</button>
-      <button id="restore-published-link-btn" class="ghost-button small-button" type="button">从订阅链接恢复</button>
+      ${state.publicConverter ? "" : '<button id="restore-published-link-btn" class="ghost-button small-button" type="button">从订阅链接恢复</button>'}
       <button id="discard-draft-btn" class="ghost-button small-button" type="button">删除当前草稿</button>
     `;
   } else if (mode === "local_draft") {
@@ -1343,7 +1378,7 @@ function renderSessionBanner() {
       <button id="update-local-draft-btn" class="secondary-button small-button" type="button">更新本机草稿</button>
       <button id="save-local-draft-btn" class="ghost-button small-button" type="button">另存为新草稿</button>
       <button id="manage-local-drafts-btn" class="ghost-button small-button" type="button">管理草稿</button>
-      <button id="restore-published-link-btn" class="ghost-button small-button" type="button">从订阅链接恢复</button>
+      ${state.publicConverter ? "" : '<button id="restore-published-link-btn" class="ghost-button small-button" type="button">从订阅链接恢复</button>'}
       <button id="exit-draft-mode-btn" class="ghost-button small-button" type="button">退出草稿模式</button>
       <button id="clear-session-btn" class="danger-ghost-button small-button" type="button">清空当前会话</button>
     `;
@@ -1505,7 +1540,7 @@ function renderDraftManager() {
     list.innerHTML = `
       <div class="draft-empty-state">
         <strong>暂无本机草稿</strong>
-        <span>可将当前配置另存为新草稿，或从订阅链接恢复。</span>
+        <span>${state.publicConverter ? "可将当前配置另存为本机草稿。" : "可将当前配置另存为新草稿，或从订阅链接恢复。"}</span>
       </div>
     `;
     return;
@@ -1691,6 +1726,10 @@ async function restoreLocalDraft(id = "") {
 }
 
 function openRestorePublishedDialog() {
+  if (state.publicConverter) {
+    showToast("公网模式不支持从发布链接恢复源配置。", true);
+    return;
+  }
   setValue("restore-published-url-input", "");
   const dialog = document.getElementById("restore-published-dialog");
   if (!dialog) return;
@@ -1701,6 +1740,10 @@ function openRestorePublishedDialog() {
 }
 
 async function restoreWorkspaceFromPublishedLink() {
+  if (state.publicConverter) {
+    showToast("公网模式不支持从发布链接恢复源配置。", true);
+    return;
+  }
   const publishedURL = getValue("restore-published-url-input").trim();
   if (!publishedURL) {
     showToast("请粘贴本工具生成的完整订阅链接。", true);
@@ -3968,7 +4011,7 @@ function createSubscriptionEntry(values = {}) {
     enabled: values.enabled !== false,
     url,
     user_agent: values.user_agent || DEFAULT_SOURCE_USER_AGENT,
-    allow_lan: values.allow_lan === true,
+    allow_lan: !state.publicConverter && values.allow_lan === true,
   };
 }
 
@@ -4031,6 +4074,9 @@ function sourceEmojiDuplicateWarning(item, index) {
 }
 
 function sourceLANWarning(item) {
+  if (state.publicConverter && isPrivateSubscriptionURL(item?.url)) {
+    return "公开服务不支持局域网订阅地址。";
+  }
   if (!isPrivateSubscriptionURL(item?.url) || item?.allow_lan === true) {
     return "";
   }
@@ -4050,15 +4096,8 @@ function sourceNamePreviewLabel(item) {
 }
 
 function renderSubscriptionRow(item, index) {
-  const warnings = [
-    sourceEmojiDuplicateWarning(item, index),
-    sourceLANWarning(item),
-  ].filter(Boolean);
-  const lanBadge = item.allow_lan
-    ? '<span class="source-meta-separator">·</span><span class="source-meta-link">LAN</span>'
-    : "";
   return `
-    <div class="source-row subscription-item">
+    <div class="source-row subscription-item" data-sub-row-index="${index}">
       <div class="source-row-main">
         <div class="source-enable source-toggle">
           <span class="source-enable-label">启用</span>
@@ -4074,24 +4113,36 @@ function renderSubscriptionRow(item, index) {
         <input class="source-url source-url-input" type="text" data-sub-field="url" data-sub-index="${index}" placeholder="https://example.com/sub?token=xxx" value="${escapeHtml(item.url)}" />
         <button class="tiny-button danger-ghost source-delete-btn" type="button" data-sub-action="delete" data-sub-index="${index}">删除</button>
       </div>
-      <div class="source-row-meta">
-        <span class="source-domain">${escapeHtml(sourceDomainFromUrl(item.url) || "未识别域名")}</span>
-        <span class="source-meta-separator">·</span>
-        <span class="source-preview" data-sub-index="${index}" title="${escapeHtml(sourceNamePreviewLabel(item))}">${escapeHtml(sourceNamePreviewLabel(item))}</span>
-        <span class="source-meta-separator">·</span>
-        <span class="source-meta-link">User-Agent</span>
-        ${lanBadge}
-        ${warnings.length ? `<span class="source-meta-separator">·</span><span class="source-warning-inline">${escapeHtml(warnings.join(" "))}</span>` : ""}
-      </div>
+      <div class="source-row-meta" data-source-meta-index="${index}">${renderSourceRowMeta(item, index)}</div>
       <details class="source-advanced inline-advanced">
         <summary>高级</summary>
-        <label class="checkbox-line compact-check">
+        ${state.publicConverter ? "" : `<label class="checkbox-line compact-check">
           <input type="checkbox" data-sub-field="allow_lan" data-sub-index="${index}" ${item.allow_lan ? "checked" : ""} />
           允许局域网订阅地址
-        </label>
+        </label>`}
         <input type="text" data-sub-field="user_agent" data-sub-index="${index}" value="${escapeHtml(item.user_agent || DEFAULT_SOURCE_USER_AGENT)}" />
       </details>
     </div>
+  `;
+}
+
+function renderSourceRowMeta(item, index) {
+  const warnings = [
+    sourceEmojiDuplicateWarning(item, index),
+    sourceLANWarning(item),
+  ].filter(Boolean);
+  const lanBadge = item.allow_lan && !state.publicConverter
+    ? '<span class="source-meta-separator">·</span><span class="source-meta-link">LAN</span>'
+    : "";
+  const preview = sourceNamePreviewLabel(item);
+  return `
+    <span class="source-domain">${escapeHtml(sourceDomainFromUrl(item.url) || "未识别域名")}</span>
+    <span class="source-meta-separator">·</span>
+    <span class="source-preview" data-sub-index="${index}" title="${escapeHtml(preview)}">${escapeHtml(preview)}</span>
+    <span class="source-meta-separator">·</span>
+    <span class="source-meta-link">User-Agent</span>
+    ${lanBadge}
+    ${warnings.length ? `<span class="source-meta-separator">·</span><span class="source-warning-inline">${escapeHtml(warnings.join(" "))}</span>` : ""}
   `;
 }
 
@@ -4123,7 +4174,7 @@ function normalizeSubscriptionEntries(items) {
       enabled: source.enabled !== false,
       url: source.url || "",
       user_agent: source.user_agent || DEFAULT_SOURCE_USER_AGENT,
-      allow_lan: source.allow_lan === true,
+      allow_lan: !state.publicConverter && source.allow_lan === true,
     });
   });
 }
@@ -4165,10 +4216,10 @@ function renderSubscriptionManager() {
       renderSubscriptionMeta();
       renderNodeEditor();
       if (field === "url") {
-        if (isPrivateSubscriptionURL(element.value)) {
+        if (!state.publicConverter && isPrivateSubscriptionURL(element.value)) {
           state.subscriptions[index].allow_lan = true;
         }
-        renderSubscriptionManager();
+        updateSubscriptionRowMeta(index);
       } else if (field === "name") {
         updateSourceRowPreview(index);
       } else if (field === "allow_lan") {
@@ -4212,6 +4263,13 @@ function updateSourceRowPreview(index) {
   const preview = sourceNamePreviewLabel(item);
   row.textContent = preview;
   row.title = preview;
+}
+
+function updateSubscriptionRowMeta(index) {
+  const item = state.subscriptions[index];
+  const meta = document.querySelector(`[data-source-meta-index="${index}"]`);
+  if (!item || !meta) return;
+  meta.innerHTML = renderSourceRowMeta(item, index);
 }
 
 function renderEmojiPopoverContent(index) {
@@ -4612,7 +4670,7 @@ function applyBatchImport() {
         url: item.url,
         enabled: true,
         user_agent: DEFAULT_SOURCE_USER_AGENT,
-        allow_lan: isPrivateSubscriptionURL(item.url),
+        allow_lan: !state.publicConverter && isPrivateSubscriptionURL(item.url),
       }),
     );
   });
@@ -5053,7 +5111,7 @@ function buildConfigFromForm(options = {}) {
         url: item.url.trim(),
         user_agent: item.user_agent?.trim() || DEFAULT_SOURCE_USER_AGENT,
         insecure_skip_verify: getChecked("opt-skip-tls"),
-        allow_lan: item.allow_lan === true,
+        allow_lan: item.allow_lan === true && !state.publicConverter,
       };
     });
 
@@ -5071,6 +5129,12 @@ function buildConfigFromForm(options = {}) {
 }
 
 async function generateSubscription() {
+  if (state.generationInFlight) {
+    showToast("生成任务正在进行，请稍候。");
+    return;
+  }
+  state.generationInFlight = true;
+  renderResult();
   try {
     const hasSubscription = state.subscriptions.some((item) => item.url.trim());
     const hasInline =
@@ -5093,7 +5157,7 @@ async function generateSubscription() {
     const saveResult = await saveConfig(config);
     if (!saveResult) {
       state.generateStatus = "error";
-      state.lastError = "当前会话写入失败";
+      state.lastError = state.lastError || "当前会话写入失败";
       stopGenerateProgressPolling();
       renderResult();
       return;
@@ -5136,8 +5200,88 @@ async function generateSubscription() {
     state.lastError = error?.message || String(error) || "未知错误";
     stopGenerateProgressPolling();
     renderResult();
-    showToast(`生成失败：${state.lastError}`, true);
+    showToast(describeGenerationError(state.lastError).title, true);
+  } finally {
+    state.generationInFlight = false;
+    renderResult();
   }
+}
+
+function describeGenerationError(rawError) {
+  const raw = String(rawError || "").trim();
+  const lower = raw.toLowerCase();
+
+  if (lower.includes("rate_limited") || lower.includes("too many requests")) {
+    return {
+      title: "请求过于频繁",
+      description: "生成请求触发了安全限流，请等待一分钟后再试。当前配置已经保存，不需要重新填写。",
+    };
+  }
+  if (lower.includes("refresh_in_progress")) {
+    return {
+      title: "已有生成任务正在运行",
+      description: "请等待当前任务结束后再试，不需要重复点击生成按钮。",
+    };
+  }
+  if (lower.includes("cross_origin_request")) {
+    return {
+      title: "页面来源校验失败",
+      description: "请从当前服务地址直接打开页面，不要通过第三方网页或嵌入页面操作。",
+    };
+  }
+  if (lower.includes("workspace_not_found") || lower.includes("workspace_required")) {
+    return {
+      title: "当前隐私会话已失效",
+      description: "请先保存本机草稿，再重新打开页面恢复草稿后生成。",
+    };
+  }
+
+  if (lower.includes("no allowed ips") || lower.includes("blocked host")) {
+    return {
+      title: "订阅地址无法访问",
+      description:
+        "该域名解析到了受限网络地址。请检查本机 DNS 或代理设置，或改用可公网访问的订阅地址。",
+    };
+  }
+  if (lower.includes("resolve host") || lower.includes("no such host")) {
+    return {
+      title: "订阅域名无法解析",
+      description: "请确认订阅地址拼写正确，并检查当前网络的 DNS 是否可用。",
+    };
+  }
+  if (lower.includes("timeout") || lower.includes("deadline exceeded")) {
+    return {
+      title: "订阅服务器响应超时",
+      description: "订阅服务器暂时没有响应。请稍后重试，或确认该地址能从当前网络访问。",
+    };
+  }
+  const statusMatch = raw.match(/status code\s+(\d{3})/i);
+  if (statusMatch) {
+    const statusCode = statusMatch[1];
+    return {
+      title: `订阅服务器返回 HTTP ${statusCode}`,
+      description:
+        statusCode === "401" || statusCode === "403"
+          ? "订阅链接可能已失效或无权访问，请重新获取有效链接。"
+          : "订阅服务器当前返回异常，请检查链接或稍后重试。",
+    };
+  }
+  if (lower.includes("no nodes available") || lower.includes("fetch_failed")) {
+    return {
+      title: "没有获取到可用节点",
+      description: "请检查订阅地址是否有效，并确认订阅内容中包含受支持的节点。",
+    };
+  }
+  if (lower.includes("too large") || lower.includes("size limit")) {
+    return {
+      title: "订阅文件超过大小限制",
+      description: "请减少订阅内容，或使用体积更小的订阅文件后重试。",
+    };
+  }
+  return {
+    title: "生成失败",
+    description: "当前配置未能生成。请检查订阅源后重试，详细原因可在诊断日志中查看。",
+  };
 }
 
 async function validateManualNodesBeforeGenerate() {
@@ -5164,19 +5308,54 @@ async function saveConfig(config) {
     body: JSON.stringify(backendConfig),
   });
   if (!response?.ok) {
-    showToast(readAPIError(response) || "写入当前会话失败。", true);
+    const code = String(response?.error?.code || "").trim();
+    const message = readAPIError(response) || "写入当前会话失败。";
+    state.lastError = code ? `[${code}] ${message}` : message;
+    showToast(describeGenerationError(state.lastError).title, true);
     return false;
   }
   return true;
 }
 
+function wait(milliseconds) {
+  return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
+}
+
+async function recoverRunningRefresh(timeoutMilliseconds = 30000) {
+  const deadline = Date.now() + timeoutMilliseconds;
+  while (Date.now() < deadline) {
+    await wait(800);
+    const status = await fetchJSON("/api/status");
+    if (status?.error) return null;
+    if (status?.refreshing) continue;
+
+    const published = await fetchJSON("/api/published");
+    if (!published?.ok || !published?.publish_id) return null;
+    return {
+      ...published,
+      ok: true,
+      node_count: Number.parseInt(status?.node_count, 10) || 0,
+      subscription_url: published.subscription_url || published.url || "",
+    };
+  }
+  return null;
+}
+
 async function refreshNow() {
-  const response = await fetchJSON("/api/refresh", {
-    method: "POST",
-  });
+  let response = await fetchJSON("/api/refresh", { method: "POST" });
+  if (!response?.ok && response?._networkError) {
+    await wait(800);
+    response = await fetchJSON("/api/refresh", { method: "POST" });
+  }
+  if (!response?.ok && response?.error?.code === "REFRESH_IN_PROGRESS") {
+    const recovered = await recoverRunningRefresh();
+    if (recovered) return recovered;
+  }
   if (!response?.ok) {
-    state.lastError = readAPIError(response) || "刷新失败";
-    showToast(state.lastError, true);
+    const code = String(response?.error?.code || "").trim();
+    const message = readAPIError(response) || "刷新失败";
+    state.lastError = code ? `[${code}] ${message}` : message;
+    showToast(describeGenerationError(state.lastError).title, true);
     return null;
   }
   state.lastError = "";
@@ -5207,7 +5386,7 @@ function startGenerateProgressPolling() {
   stopGenerateProgressPolling();
   state.generateProgressTimer = window.setInterval(() => {
     void loadStatus();
-  }, 350);
+  }, 800);
 }
 
 function stopGenerateProgressPolling() {
@@ -5229,8 +5408,13 @@ function renderResult() {
   const rotateButton = document.getElementById("rotate-token-btn");
   const deleteButton = document.getElementById("delete-published-btn");
   const generateButton = document.getElementById("generate-btn");
+  const summaryRefreshButton = document.getElementById("summary-refresh-btn");
+  const errorCard = document.getElementById("result-error-card");
+  const errorTitle = document.getElementById("result-error-title");
+  const errorDescription = document.getElementById("result-error-description");
   const hasResult = Boolean(state.generatedUrl);
   const published = state.published;
+  const errorState = describeGenerationError(state.lastError);
 
   let statusLabel = "未生成";
   let statusText = "尚未生成订阅链接";
@@ -5254,7 +5438,7 @@ function renderResult() {
     statusDotClass = "success";
   } else if (state.generateStatus === "error") {
     statusLabel = "生成失败";
-    statusText = state.lastError || "生成失败";
+    statusText = errorState.title;
     statusClass = "result-error";
     statusDotClass = "error";
   } else if (state.publishNotice) {
@@ -5268,12 +5452,30 @@ function renderResult() {
     panel.classList.toggle("success-panel", state.generateStatus === "success");
     panel.classList.toggle("error-panel", state.generateStatus === "error");
   }
+  if (errorCard) {
+    const showError = state.generateStatus === "error";
+    errorCard.classList.toggle("hidden", !showError);
+    if (showError) {
+      errorTitle.textContent = errorState.title;
+      errorDescription.textContent = errorState.description;
+    }
+  }
   if (actionStatus) {
     actionStatus.className = `result-status ${statusClass}`.trim();
     actionStatus.innerHTML = `
       <span class="status-dot ${statusDotClass}"></span>
       <span>${escapeHtml(statusText)}</span>
+      ${state.generateStatus === "error" ? '<span class="result-status-hint">查看原因</span>' : ""}
     `;
+    if (state.generateStatus === "error") {
+      actionStatus.setAttribute("role", "button");
+      actionStatus.setAttribute("tabindex", "0");
+      actionStatus.setAttribute("title", "查看失败原因");
+    } else {
+      actionStatus.removeAttribute("role");
+      actionStatus.removeAttribute("tabindex");
+      actionStatus.removeAttribute("title");
+    }
   }
   if (time) {
     time.textContent = state.lastGeneratedAt || "";
@@ -5292,10 +5494,10 @@ function renderResult() {
     openButton.disabled = !hasResult;
   }
   if (viewButton) {
-    viewButton.disabled = !hasResult && state.generateStatus !== "error";
+    viewButton.disabled = !hasResult;
   }
   if (generateButton) {
-    generateButton.disabled = state.generateStatus === "generating";
+    generateButton.disabled = state.generationInFlight;
     if (state.generateStatus === "generating") {
       setButtonIconText(generateButton, "生成中...");
     } else if (state.generateStatus === "success") {
@@ -5303,6 +5505,9 @@ function renderResult() {
     } else {
       setButtonIconText(generateButton, "生成订阅链接");
     }
+  }
+  if (summaryRefreshButton) {
+    summaryRefreshButton.disabled = state.generationInFlight;
   }
   if (rotateButton) {
     rotateButton.disabled =
@@ -5526,6 +5731,24 @@ function focusGeneratedLink() {
   window.setTimeout(() => input.classList.remove("result-highlight"), 1600);
 }
 
+function focusSubscriptionSources() {
+  switchWorkspace("config");
+  const list = document.getElementById("subscription-list");
+  const firstSource = list?.querySelector(".source-url-input");
+  list?.scrollIntoView({ behavior: "smooth", block: "center" });
+  window.setTimeout(() => firstSource?.focus({ preventScroll: true }), 260);
+}
+
+function focusGenerationError() {
+  if (state.generateStatus !== "error") return;
+  switchWorkspace("config");
+  window.setTimeout(() => {
+    document
+      .getElementById("result-panel")
+      ?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, 80);
+}
+
 function previewYAMLWorkspace() {
   switchWorkspace("yaml");
   loadYamlPreview();
@@ -5673,7 +5896,7 @@ function renderNodeEditor() {
 
 function renderNodeStatsStrip() {
   const items = [
-    ["共", `${state.nodeSummary.total || 0} 个节点`],
+    ["节点", state.nodeSummary.total || 0],
     ["已启用", state.nodeSummary.enabled || 0],
     ["已修改", state.nodeSummary.modified || 0],
     ["已禁用", state.nodeSummary.disabled || 0],
@@ -5747,7 +5970,26 @@ function renderNodeBulkActionBar() {
 function renderNodeTable() {
   const body = document.getElementById("node-table-body");
   if (!state.nodes.length) {
-    body.innerHTML = `<tr><td colspan="7" class="table-empty">当前没有可显示的节点</td></tr>`;
+    const hasActiveFilters =
+      String(state.nodeFilters.q || "").trim() ||
+      (state.nodeFilters.type && state.nodeFilters.type !== "all") ||
+      (state.nodeFilters.region && state.nodeFilters.region !== "ALL") ||
+      (state.nodeFilters.status && state.nodeFilters.status !== "all") ||
+      state.nodeFilters.source;
+    const emptyTitle = hasActiveFilters ? "没有匹配的节点" : "暂无节点";
+    const emptyDescription = hasActiveFilters
+      ? "调整搜索或筛选条件后再试"
+      : "添加订阅或手动节点后会显示在这里";
+    body.innerHTML = `
+      <tr class="node-empty-row">
+        <td colspan="7" class="table-empty">
+          <div class="node-empty-state">
+            <strong>${emptyTitle}</strong>
+            <span>${emptyDescription}</span>
+          </div>
+        </td>
+      </tr>
+    `;
     updateNodeSelectPageCheckbox();
     return;
   }
@@ -6827,29 +7069,75 @@ function renderYamlViewer() {
   const viewer = document.getElementById("yaml-viewer");
   const gutter = document.getElementById("yaml-line-numbers");
   const code = document.getElementById("yaml-code-content");
+  const searchInput = document.getElementById("yaml-search");
+  const wrapToggle = document.getElementById("yaml-wrap-toggle");
+  const copyButton = document.getElementById("copy-yaml-btn");
+  const hasYaml = Boolean(String(state.yamlPreview || "").trim());
   const visibleText = limitLines(
     state.yamlPreview || "",
     YAML_PREVIEW_LINE_LIMIT,
   );
-  const lines = String(visibleText || "").split("\n");
-  gutter.textContent = lines.map((_, index) => String(index + 1)).join("\n");
+  const lines = hasYaml ? String(visibleText).split("\n") : [];
+  viewer.classList.toggle("is-empty", !hasYaml);
   viewer.classList.toggle("wrapped", state.yamlWrap);
+
+  if (searchInput) {
+    searchInput.disabled = !hasYaml;
+    searchInput.placeholder = hasYaml ? "搜索 YAML 内容" : "生成后可搜索 YAML";
+    if (!hasYaml) {
+      state.yamlSearch = "";
+      searchInput.value = "";
+    }
+  }
+  if (wrapToggle) wrapToggle.disabled = !hasYaml;
+  if (copyButton) copyButton.disabled = !hasYaml;
+
+  if (!hasYaml) {
+    gutter.textContent = "";
+    code.textContent = "生成配置后显示 YAML";
+    renderYamlPreviewMeta(0, 0);
+    return;
+  }
 
   const query = state.yamlSearch.trim();
   let matchCount = 0;
   const html = lines
-    .map((line) => {
+    .map((line, index) => {
       const highlighted = renderYAMLLine(line, query);
       matchCount += highlighted.count;
-      return highlighted.html;
+      return `<span class="yaml-source-line" data-line="${index + 1}">${highlighted.html || "&nbsp;"}</span>`;
     })
-    .join("\n");
+    .join("");
 
   code.innerHTML = html;
+  syncYamlGutter();
   renderYamlPreviewMeta(lines.length, countYAMLLines(state.yamlPreview), {
     query,
     matchCount,
   });
+}
+
+function syncYamlGutter() {
+  const viewer = document.getElementById("yaml-viewer");
+  const gutter = document.getElementById("yaml-line-numbers");
+  const code = document.getElementById("yaml-code-content");
+  if (!viewer || !gutter || !code || viewer.classList.contains("is-empty")) {
+    return;
+  }
+
+  const sourceLines = Array.from(code.querySelectorAll(".yaml-source-line"));
+  if (!sourceLines.length) {
+    gutter.textContent = "";
+    return;
+  }
+
+  const lineHeight = Number.parseFloat(getComputedStyle(code).lineHeight) || 1;
+  gutter.innerHTML = sourceLines
+    .map((line, index) => {
+      const height = Math.max(lineHeight, line.getBoundingClientRect().height);
+      return `<span class="yaml-line-number" style="height:${height}px">${index + 1}</span>`;
+    })
+    .join("");
 }
 
 function renderYamlPreviewMeta(previewLines, totalLines, options = {}) {
@@ -6857,26 +7145,20 @@ function renderYamlPreviewMeta(previewLines, totalLines, options = {}) {
   if (!meta) return;
   const hasYaml = Boolean(String(state.yamlPreview || "").trim());
   if (!hasYaml) {
-    meta.textContent = `未生成 · 当前仅显示前 ${YAML_PREVIEW_LINE_LIMIT} 行，可复制完整 YAML 或通过订阅链接使用。`;
+    meta.textContent = "生成配置后可在此查看、搜索和复制 YAML。";
     return;
   }
   const visibleLines = Math.min(previewLines || 0, YAML_PREVIEW_LINE_LIMIT);
   const lineText =
     totalLines > visibleLines
-      ? `显示前 ${visibleLines} 行 / 完整 ${totalLines} 行`
-      : `显示 ${visibleLines} 行 / 完整 ${totalLines} 行`;
+      ? `预览前 ${visibleLines} 行 / 共 ${totalLines} 行`
+      : `共 ${visibleLines} 行`;
   const nodeCount = Number.parseInt(state.resultNodeCount, 10) || 0;
   const ruleCount = Number.parseInt(state.resultRuleCount, 10) || 0;
-  const parts = [
-    "已生成",
-    lineText,
-    `${nodeCount} 个节点`,
-    `${ruleCount} 条规则`,
-  ];
+  const parts = [lineText, `${nodeCount} 个节点`, `${ruleCount} 条规则`];
   if (options.query) {
     parts.push(`匹配 ${options.matchCount || 0} 处`);
   }
-  parts.push("可复制完整 YAML 或通过订阅链接使用。");
   meta.textContent = parts.join(" · ");
 }
 
@@ -6975,7 +7257,7 @@ async function loadStatus() {
   }
   const badge = document.getElementById("backend-badge");
   badge.className = `status-badge ${state.backendOnline ? "online" : "offline"}`;
-  badge.innerHTML = `${icon("server", `status-icon ${state.backendOnline ? "success" : "danger"}`)}<span class="dot"></span><span>${state.backendOnline ? "Backend Online" : "Backend Offline"}</span>`;
+  badge.innerHTML = `${icon("server", `status-icon ${state.backendOnline ? "success" : "danger"}`)}<span class="dot"></span><span>${state.backendOnline ? "服务在线" : "服务离线"}</span>`;
   updateSummary();
   renderResult();
   renderDiagnostics();
@@ -7112,6 +7394,23 @@ function extractLogDiagnostics(logText) {
       diagnostics.missingRuleProviders += 1;
       diagnostics.items.push({ title: "缺失规则提供器", detail: line });
     }
+    if (
+      lower.includes("no allowed ips") &&
+      !diagnostics.items.some((item) => item.title === "订阅地址受限")
+    ) {
+      diagnostics.items.push({
+        title: "订阅地址受限",
+        detail: "订阅域名解析到了受限网络地址，请检查 DNS 或代理的 Fake-IP 设置。",
+      });
+    } else if (
+      (lower.includes("fetch_failed") || lower.includes("refresh failed")) &&
+      !diagnostics.items.some((item) => item.title === "订阅抓取失败")
+    ) {
+      diagnostics.items.push({
+        title: "订阅抓取失败",
+        detail: "未能读取订阅内容，请检查订阅地址或稍后重试。",
+      });
+    }
   });
   diagnostics.items = diagnostics.items.slice(0, 20);
   return diagnostics;
@@ -7186,7 +7485,13 @@ function buildBrowserViewURL(url) {
 
 function openUrl(url) {
   if (!url) return;
-  window.open(url, "_blank", "noopener,noreferrer");
+  try {
+    const parsed = new URL(url, window.location.href);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return;
+    window.open(parsed.toString(), "_blank", "noopener,noreferrer");
+  } catch {
+    return;
+  }
 }
 
 function limitLines(text, limit) {
@@ -7396,11 +7701,76 @@ function renderHighlightedToken(text, className, query) {
 
 async function fetchJSON(url, options) {
   try {
-    const response = await fetch(withWorkspace(url), options);
-    return await response.json();
+    const requestOptions = { credentials: "same-origin", ...(options || {}) };
+    const headers = new Headers(options?.headers || {});
+    const method = String(requestOptions.method || "GET").toUpperCase();
+    if (["POST", "PUT", "PATCH", "DELETE"].includes(method) && state.csrfToken) {
+      headers.set("X-SubConv-CSRF", state.csrfToken);
+    }
+    requestOptions.headers = headers;
+    const response = await fetch(withWorkspace(url), requestOptions);
+    if (response.status === 401 && !String(url).startsWith("/api/auth/")) {
+      redirectToLogin();
+      return {
+        ok: false,
+        _httpStatus: response.status,
+        error: { code: "UNAUTHORIZED", message: "登录已过期" },
+      };
+    }
+    const payload = await response.json();
+    return {
+      ...(payload || {}),
+      _httpStatus: response.status,
+      _retryAfter: Number.parseInt(response.headers.get("Retry-After"), 10) || 0,
+    };
   } catch (error) {
-    return { ok: false, error: { message: error.message || "request failed" } };
+    return {
+      ok: false,
+      _httpStatus: 0,
+      _networkError: true,
+      error: { code: "NETWORK_ERROR", message: error.message || "request failed" },
+    };
   }
+}
+
+async function loadAuthSession() {
+  try {
+    const response = await fetch("/api/auth/session", {
+      credentials: "same-origin",
+      headers: { Accept: "application/json" },
+    });
+    const session = await response.json();
+    state.authRequired = Boolean(session.required);
+    state.publicConverter = Boolean(session.public_converter);
+    state.csrfToken = session.csrf_token || "";
+    document.getElementById("logout-btn")?.classList.toggle("hidden", !state.authRequired);
+    if (state.authRequired && !session.authenticated) {
+      redirectToLogin();
+      return false;
+    }
+    return true;
+  } catch (_error) {
+    return true;
+  }
+}
+
+async function logoutManagementSession() {
+  const button = document.getElementById("logout-btn");
+  if (button) button.disabled = true;
+  try {
+    await fetch("/api/auth/logout", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: state.csrfToken ? { "X-SubConv-CSRF": state.csrfToken } : {},
+    });
+  } finally {
+    window.location.replace("/login");
+  }
+}
+
+function redirectToLogin() {
+  const next = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+  window.location.replace(`/login?next=${encodeURIComponent(next)}`);
 }
 
 function withWorkspace(rawUrl) {
@@ -7409,6 +7779,7 @@ function withWorkspace(rawUrl) {
   if (!url.startsWith("/api/")) return url;
   if (
     url.startsWith("/api/workspaces") ||
+    url.startsWith("/api/auth/") ||
     url.startsWith("/api/site-logo") ||
     url.startsWith("/api/parse") ||
     url.startsWith("/api/update-check")

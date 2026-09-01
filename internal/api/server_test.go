@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -17,6 +18,7 @@ import (
 	"subconv-next/internal/config"
 	"subconv-next/internal/model"
 	"subconv-next/internal/pipeline"
+	"subconv-next/internal/storage"
 )
 
 func newTestServer(t *testing.T, cfg model.Config) (*Server, model.Config) {
@@ -300,6 +302,52 @@ func TestHandleUpdateCheckFallsBackToLatestRedirect(t *testing.T) {
 	}
 	if body.LatestVersion != "v0.2.0" || !body.UpdateAvailable || body.ReleaseURL == "" {
 		t.Fatalf("unexpected update response: %+v", body)
+	}
+}
+
+func TestUpdateCheckRejectsCrossOriginRedirect(t *testing.T) {
+	targetHit := make(chan struct{}, 1)
+	targetServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		targetHit <- struct{}{}
+		_, _ = w.Write([]byte(`{"tag_name":"v9.9.9"}`))
+	}))
+	defer targetServer.Close()
+
+	redirectServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, targetServer.URL+"/private", http.StatusFound)
+	}))
+	defer redirectServer.Close()
+
+	req, err := http.NewRequest(http.MethodGet, redirectServer.URL+"/latest", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := doUpdateCheckRequest(req); err == nil || !strings.Contains(err.Error(), "cross-origin") {
+		t.Fatalf("doUpdateCheckRequest() error = %v, want cross-origin redirect rejection", err)
+	}
+	select {
+	case <-targetHit:
+		t.Fatal("cross-origin redirect target was requested")
+	default:
+	}
+}
+
+func TestUpdateCheckSanitizesReleaseURL(t *testing.T) {
+	releaseServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"tag_name":"v0.2.0","html_url":"javascript:alert(1)"}`))
+	}))
+	defer releaseServer.Close()
+
+	oldReleaseURL := latestReleaseURL
+	latestReleaseURL = releaseServer.URL
+	defer func() { latestReleaseURL = oldReleaseURL }()
+
+	release, err := fetchLatestRelease(context.Background())
+	if err != nil {
+		t.Fatalf("fetchLatestRelease() error = %v", err)
+	}
+	if release.HTMLURL != "" {
+		t.Fatalf("unsafe release URL = %q, want empty", release.HTMLURL)
 	}
 }
 
@@ -1341,6 +1389,138 @@ func TestRefreshLock(t *testing.T) {
 	<-firstDone
 }
 
+func TestRefreshLockIsScopedToWorkspace(t *testing.T) {
+	cfg := model.DefaultConfig()
+	cfg.Inline = []model.InlineConfig{
+		{Name: "manual", Enabled: true, Content: "ss://YWVzLTI1Ni1nY206cGFzczRAZXhhbXBsZS5jb206NDQz#parallel"},
+	}
+	server, cfg := newTestServer(t, cfg)
+	workspaceIDs := []string{
+		createWorkspaceForTest(t, server, cfg),
+		createWorkspaceForTest(t, server, cfg),
+	}
+
+	started := make(chan struct{}, len(workspaceIDs))
+	release := make(chan struct{})
+	server.refreshBeforeRun = func() {
+		started <- struct{}{}
+		<-release
+	}
+
+	results := make(chan int, len(workspaceIDs))
+	for _, workspaceID := range workspaceIDs {
+		go func(id string) {
+			req := httptest.NewRequest(http.MethodPost, withWorkspace("/api/refresh", id), nil)
+			rec := httptest.NewRecorder()
+			server.Handler().ServeHTTP(rec, req)
+			results <- rec.Code
+		}(workspaceID)
+	}
+
+	for range workspaceIDs {
+		select {
+		case <-started:
+		case <-time.After(2 * time.Second):
+			close(release)
+			t.Fatal("distinct workspaces did not start refresh concurrently")
+		}
+	}
+	close(release)
+	for range workspaceIDs {
+		if code := <-results; code != http.StatusOK {
+			t.Fatalf("parallel refresh status = %d, want %d", code, http.StatusOK)
+		}
+	}
+}
+
+func TestRefreshLockSerializesDifferentWorkspacesWithSameOutput(t *testing.T) {
+	cfg := model.DefaultConfig()
+	cfg.Service.OutputPath = filepath.Join(t.TempDir(), "shared.yaml")
+	cfg.Inline = []model.InlineConfig{
+		{Name: "manual", Enabled: true, Content: "ss://YWVzLTI1Ni1nY206cGFzczRAZXhhbXBsZS5jb206NDQz#shared-output"},
+	}
+	server, cfg := newTestServer(t, cfg)
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	server.refreshBeforeRun = func() {
+		select {
+		case <-started:
+		default:
+			close(started)
+		}
+		<-release
+	}
+
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := server.startRefreshForConfig(cfg, "workspace-a", "first shared-output refresh")
+		firstDone <- err
+	}()
+
+	<-started
+	_, err := server.startRefreshForConfig(cfg, "workspace-b", "second shared-output refresh")
+	if !errors.Is(err, ErrRefreshInProgress) {
+		close(release)
+		<-firstDone
+		t.Fatalf("second shared-output refresh error = %v, want ErrRefreshInProgress", err)
+	}
+
+	close(release)
+	if err := <-firstDone; err != nil {
+		t.Fatalf("first shared-output refresh error = %v", err)
+	}
+}
+
+func TestRefreshCapacityResponseReleasesNewPublication(t *testing.T) {
+	cfg := model.DefaultConfig()
+	cfg.Inline = []model.InlineConfig{
+		{Name: "manual", Enabled: true, Content: "ss://YWVzLTI1Ni1nY206cGFzczRAZXhhbXBsZS5jb206NDQz#capacity"},
+	}
+	server, cfg := newTestServer(t, cfg)
+	ref := createWorkspaceRefForTest(t, server, cfg)
+
+	server.refreshMu.Lock()
+	for index := 0; index < maxConcurrentRefreshes; index++ {
+		key := "occupied:" + string(rune('a'+index))
+		server.refreshSlots <- struct{}{}
+		server.refreshRuns[key] = make(chan struct{})
+	}
+	server.refreshMu.Unlock()
+	defer func() {
+		server.refreshMu.Lock()
+		clear(server.refreshRuns)
+		for len(server.refreshSlots) > 0 {
+			<-server.refreshSlots
+		}
+		server.refreshMu.Unlock()
+	}()
+
+	req := httptest.NewRequest(http.MethodPost, withWorkspace("/api/refresh", ref.ID), nil)
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("status code = %d, want %d; body=%s", rec.Code, http.StatusTooManyRequests, rec.Body.String())
+	}
+	if got := rec.Header().Get("Retry-After"); got != "5" {
+		t.Fatalf("Retry-After = %q, want %q", got, "5")
+	}
+	if !strings.Contains(rec.Body.String(), "REFRESH_CAPACITY_REACHED") {
+		t.Fatalf("body = %s, want REFRESH_CAPACITY_REACHED", rec.Body.String())
+	}
+	current, err := server.loadWorkspaceByHash(ref.Hash)
+	if err != nil {
+		t.Fatalf("loadWorkspaceByHash() error = %v", err)
+	}
+	if current.Meta.PublishID != "" {
+		t.Fatalf("workspace publish ID = %q, want empty after capacity rejection", current.Meta.PublishID)
+	}
+	if count := publishedDirCount(t, server); count != 0 {
+		t.Fatalf("published dir count = %d, want 0 after capacity rejection", count)
+	}
+}
+
 func TestOverridesSurviveRefresh(t *testing.T) {
 	cfg := model.DefaultConfig()
 	cfg.Service.StatePath = filepath.Join(t.TempDir(), "state.json")
@@ -1436,6 +1616,53 @@ func TestMaskSensitiveTextMasksPublishedURLAndNodeSecrets(t *testing.T) {
 	}
 }
 
+func TestMaskSensitiveTextTruncatesLargeMessages(t *testing.T) {
+	masked := maskSensitiveText(strings.Repeat("x", 4096))
+	if len([]rune(masked)) >= 4096 {
+		t.Fatalf("maskSensitiveText() length = %d, want truncated output", len([]rune(masked)))
+	}
+	if !strings.HasSuffix(masked, "… <truncated>") {
+		t.Fatalf("maskSensitiveText() = %q, want truncation marker", masked)
+	}
+}
+
+func TestRedactConfigMasksNestedURLsAndHeaders(t *testing.T) {
+	cfg := model.DefaultConfig()
+	cfg.Subscriptions = []model.SubscriptionConfig{{
+		URL:        "https://user:password@example.com/sub?token=subscription-secret",
+		SourceLogo: "https://cdn.example/logo.png?signature=logo-secret",
+	}}
+	cfg.Render.CustomRules = []model.CustomRule{{URL: "https://rules.example/list?key=rule-secret"}}
+	cfg.Render.RuleProviders = []model.RuleProviderConfig{{
+		URL: "https://rules.example/provider?token=provider-secret",
+		Headers: map[string][]string{
+			"Authorization": {"Bearer header-secret"},
+			"User-Agent":    {"safe-agent"},
+		},
+	}}
+	cfg.Render.ExternalConfig.CustomURL = "https://template.example/config?auth=template-secret"
+	cfg.Render.DNS = &model.DNSConfig{
+		Nameserver: []string{"https://dns.example/dns-query?token=dns-secret"},
+	}
+
+	data, err := json.Marshal(RedactConfig(cfg))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(data)
+	for _, secret := range []string{
+		"password", "subscription-secret", "logo-secret", "rule-secret",
+		"provider-secret", "header-secret", "template-secret", "dns-secret",
+	} {
+		if strings.Contains(body, secret) {
+			t.Fatalf("redacted config leaked %q: %s", secret, body)
+		}
+	}
+	if !strings.Contains(body, "safe-agent") || !strings.Contains(body, maskedSecretValue) {
+		t.Fatalf("redacted config lost safe headers or masks: %s", body)
+	}
+}
+
 func TestHandleConfigGetAndPut(t *testing.T) {
 	cfg := model.DefaultConfig()
 	cfg.Service.AccessToken = "config-token"
@@ -1446,6 +1673,7 @@ func TestHandleConfigGetAndPut(t *testing.T) {
 	ref := createWorkspaceRefForTest(t, server, cfg)
 
 	getReq := httptest.NewRequest(http.MethodGet, withWorkspace("/api/config", ref.ID), nil)
+	getReq.Header.Set("Authorization", "Bearer config-token")
 	getRec := httptest.NewRecorder()
 	server.Handler().ServeHTTP(getRec, getReq)
 
@@ -1489,6 +1717,7 @@ func TestHandleConfigGetAndPut(t *testing.T) {
   }
 }`)
 	putReq := httptest.NewRequest(http.MethodPut, withWorkspace("/api/config", ref.ID), putBody)
+	putReq.Header.Set("Authorization", "Bearer config-token")
 	putRec := httptest.NewRecorder()
 	server.Handler().ServeHTTP(putRec, putReq)
 
@@ -1502,6 +1731,9 @@ func TestHandleConfigGetAndPut(t *testing.T) {
 	}
 	if !bytes.Contains(data, []byte(`"name": "manual"`)) {
 		t.Fatalf("written config = %q, want inline source", string(data))
+	}
+	if !bytes.Contains(data, []byte(`"access_token": "config-token"`)) {
+		t.Fatalf("written config did not preserve redacted access token: %s", string(data))
 	}
 }
 
@@ -1535,6 +1767,25 @@ func TestWorkspaceCreateAndDelete(t *testing.T) {
 	if createBody.WorkspaceID == "" || len(createBody.WorkspaceID) < 20 {
 		t.Fatalf("workspace_id = %q, want sufficiently random id", createBody.WorkspaceID)
 	}
+	createdRef := server.buildWorkspaceRef(createBody.WorkspaceID)
+	for _, path := range []string{createdRef.Dir, createdRef.CacheDir} {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatalf("Stat(%s) error = %v", path, err)
+		}
+		if got := info.Mode().Perm(); got != 0o700 {
+			t.Fatalf("directory %s mode = %#o, want %#o", path, got, 0o700)
+		}
+	}
+	for _, path := range []string{createdRef.ConfigPath, createdRef.StatePath, createdRef.MetaPath} {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatalf("Stat(%s) error = %v", path, err)
+		}
+		if got := info.Mode().Perm(); got != 0o600 {
+			t.Fatalf("file %s mode = %#o, want %#o", path, got, 0o600)
+		}
+	}
 
 	getReq := httptest.NewRequest(http.MethodGet, withWorkspace("/api/config", createBody.WorkspaceID), nil)
 	getRec := httptest.NewRecorder()
@@ -1554,6 +1805,30 @@ func TestWorkspaceCreateAndDelete(t *testing.T) {
 	server.Handler().ServeHTTP(getRec, getReq)
 	if getRec.Code != http.StatusNotFound {
 		t.Fatalf("status after delete = %d, want %d; body=%s", getRec.Code, http.StatusNotFound, getRec.Body.String())
+	}
+}
+
+func TestWorkspaceCreationStopsAtConfiguredCapacity(t *testing.T) {
+	cfg := model.DefaultConfig()
+	server, _ := newTestServer(t, cfg)
+	server.maxWorkspaces = 1
+	handler := server.Handler()
+
+	firstReq := httptest.NewRequest(http.MethodPost, "/api/workspaces", nil)
+	firstRec := httptest.NewRecorder()
+	handler.ServeHTTP(firstRec, firstReq)
+	if firstRec.Code != http.StatusOK {
+		t.Fatalf("first status code = %d, want %d; body=%s", firstRec.Code, http.StatusOK, firstRec.Body.String())
+	}
+
+	secondReq := httptest.NewRequest(http.MethodPost, "/api/workspaces", nil)
+	secondRec := httptest.NewRecorder()
+	handler.ServeHTTP(secondRec, secondReq)
+	if secondRec.Code != http.StatusTooManyRequests {
+		t.Fatalf("second status code = %d, want %d; body=%s", secondRec.Code, http.StatusTooManyRequests, secondRec.Body.String())
+	}
+	if got := secondRec.Header().Get("Retry-After"); got != "3600" {
+		t.Fatalf("Retry-After = %q, want %q", got, "3600")
 	}
 }
 
@@ -1679,6 +1954,19 @@ func TestPublishedURLUsesConfiguredPublicBaseURL(t *testing.T) {
 	if !strings.HasPrefix(refreshBody.SubscriptionURL, "https://subconv.example.com/base/s/") {
 		t.Fatalf("SubscriptionURL = %q, want configured public base URL", refreshBody.SubscriptionURL)
 	}
+	publishedRef := server.buildPublishedRef(refreshBody.PublishID)
+	if info, err := os.Stat(publishedRef.Dir); err != nil || info.Mode().Perm() != 0o700 {
+		t.Fatalf("published directory permissions: info=%v err=%v, want 0700", info, err)
+	}
+	for _, path := range []string{publishedRef.MetaPath, publishedRef.CurrentPath} {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatalf("Stat(%s) error = %v", path, err)
+		}
+		if got := info.Mode().Perm(); got != 0o600 {
+			t.Fatalf("published file %s mode = %#o, want %#o", path, got, 0o600)
+		}
+	}
 
 	statusReq := httptest.NewRequest(http.MethodGet, withWorkspace("/api/published", workspaceID), nil)
 	statusReq.Host = "internal.local:9876"
@@ -1693,6 +1981,23 @@ func TestPublishedURLUsesConfiguredPublicBaseURL(t *testing.T) {
 	}
 	if statusBody.SubscriptionURL != refreshBody.SubscriptionURL {
 		t.Fatalf("published status URL = %q, want %q", statusBody.SubscriptionURL, refreshBody.SubscriptionURL)
+	}
+}
+
+func TestNormalizePublicOriginRejectsUnsafeProxyValues(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "http://internal.local:9876/", nil)
+	req.Header.Set("X-Forwarded-Proto", "https, http")
+	if got := normalizePublicOrigin(req, false); got != "http://internal.local:9876" {
+		t.Fatalf("normalizePublicOrigin(untrusted forwarded proto) = %q", got)
+	}
+	if got := normalizePublicOrigin(req, true); got != "https://internal.local:9876" {
+		t.Fatalf("normalizePublicOrigin(valid forwarded proto) = %q", got)
+	}
+
+	req.Host = "attacker.example/path"
+	req.Header.Set("X-Forwarded-Proto", "javascript")
+	if got := normalizePublicOrigin(req, true); got != "http://127.0.0.1:9876" {
+		t.Fatalf("normalizePublicOrigin(unsafe values) = %q", got)
 	}
 }
 
@@ -2013,7 +2318,7 @@ func TestRotateTokenInvalidatesOldLink(t *testing.T) {
 	refreshBody := decodeRefreshResponse(t, refreshRec)
 	oldURL := refreshBody.SubscriptionURL
 
-	rotateReq := httptest.NewRequest(http.MethodPost, "/api/published/"+refreshBody.PublishID+"/rotate-token", nil)
+	rotateReq := httptest.NewRequest(http.MethodPost, withWorkspace("/api/published/"+refreshBody.PublishID+"/rotate-token", workspaceID), nil)
 	rotateRec := httptest.NewRecorder()
 	server.Handler().ServeHTTP(rotateRec, rotateReq)
 	if rotateRec.Code != http.StatusOK {
@@ -2042,6 +2347,134 @@ func TestRotateTokenInvalidatesOldLink(t *testing.T) {
 	server.Handler().ServeHTTP(newSubRec, newSubReq)
 	if newSubRec.Code != http.StatusOK {
 		t.Fatalf("new subscription status code = %d, want %d; body=%s", newSubRec.Code, http.StatusOK, newSubRec.Body.String())
+	}
+}
+
+func TestStaleRefreshMetadataCannotUndoTokenRotation(t *testing.T) {
+	server, _ := newTestServer(t, model.DefaultConfig())
+	published, err := server.createPublished("workspace-hash")
+	if err != nil {
+		t.Fatalf("createPublished() error = %v", err)
+	}
+	stale := published
+	rotated, err := server.rotatePublishedToken(published.ID)
+	if err != nil {
+		t.Fatalf("rotatePublishedToken() error = %v", err)
+	}
+	if err := server.finalizePublishedRefresh(nil, &stale, model.DefaultConfig(), pipeline.RenderResult{}); err != nil {
+		t.Fatalf("finalizePublishedRefresh() error = %v", err)
+	}
+
+	current, err := server.loadPublishedByID(published.ID)
+	if err != nil {
+		t.Fatalf("loadPublishedByID() error = %v", err)
+	}
+	if current.Meta.Token != rotated.Meta.Token || current.Meta.TokenHash != rotated.Meta.TokenHash {
+		t.Fatalf("stale refresh restored an old token: current=%q rotated=%q", current.Meta.Token, rotated.Meta.Token)
+	}
+	if current.Meta.Token == published.Meta.Token {
+		t.Fatal("old token became active again after stale refresh finalization")
+	}
+}
+
+func TestPublishedTokenIndexLoadsOnceAfterRestart(t *testing.T) {
+	cfg := model.DefaultConfig()
+	cfg.Service.StatePath = filepath.Join(t.TempDir(), "state.json")
+	first := NewServer("test", cfg)
+	published, err := first.createPublished("workspace-hash")
+	if err != nil {
+		t.Fatalf("createPublished() error = %v", err)
+	}
+	if err := storage.AtomicWriteFile(published.CurrentPath, []byte("proxies: []\n"), 0o600); err != nil {
+		t.Fatalf("write published YAML: %v", err)
+	}
+
+	restarted := NewServer("test", cfg)
+	if restarted.publishedIndexLoaded {
+		t.Fatal("published token index loaded eagerly")
+	}
+	loaded, err := restarted.loadPublishedByToken(published.Meta.Token)
+	if err != nil {
+		t.Fatalf("loadPublishedByToken() error = %v", err)
+	}
+	if loaded.ID != published.ID {
+		t.Fatalf("loaded publish ID = %q, want %q", loaded.ID, published.ID)
+	}
+	restarted.publishedIndexMu.RLock()
+	indexedID := restarted.publishedTokenIndex[published.Meta.TokenHash]
+	indexLoaded := restarted.publishedIndexLoaded
+	restarted.publishedIndexMu.RUnlock()
+	if !indexLoaded || indexedID != published.ID {
+		t.Fatalf("token index loaded=%v id=%q, want true/%q", indexLoaded, indexedID, published.ID)
+	}
+}
+
+func TestPublishedIDRejectsPathTraversal(t *testing.T) {
+	server, _ := newTestServer(t, model.DefaultConfig())
+	for _, publishID := range []string{"", ".", "..", "../meta", "/absolute", "p_valid/../escape", "other"} {
+		if validPublishID(publishID) {
+			t.Fatalf("validPublishID(%q) = true, want false", publishID)
+		}
+		if _, err := server.loadPublishedByID(publishID); !errors.Is(err, errWorkspaceNotFound) {
+			t.Fatalf("loadPublishedByID(%q) error = %v, want workspace not found", publishID, err)
+		}
+		if publishID != "" {
+			if _, err := server.createPublishedWithToken("workspace-hash", publishID, "token"); !errors.Is(err, errPublishedInvalidID) {
+				t.Fatalf("createPublishedWithToken(%q) error = %v, want invalid ID", publishID, err)
+			}
+		}
+	}
+	for _, publishID := range []string{"p_a", "p_missing", "p_current-binding", "p_ABC_123-xyz"} {
+		if !validPublishID(publishID) {
+			t.Fatalf("validPublishID(%q) = false, want true", publishID)
+		}
+	}
+}
+
+func TestPublishedMetadataCannotRedirectStoragePath(t *testing.T) {
+	server, _ := newTestServer(t, model.DefaultConfig())
+	for _, metadataID := range []string{"..", "p_other"} {
+		ref := server.buildPublishedRef("p_safe")
+		if err := os.MkdirAll(ref.Dir, 0o700); err != nil {
+			t.Fatalf("MkdirAll() error = %v", err)
+		}
+		data, err := json.Marshal(publishedMeta{PublishID: metadataID, TokenHash: sha256Hex("token")})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := storage.AtomicWriteFile(ref.MetaPath, data, 0o600); err != nil {
+			t.Fatalf("write malicious metadata: %v", err)
+		}
+		if _, err := server.loadPublishedByID(ref.ID); !errors.Is(err, errPublishedInvalidID) {
+			t.Fatalf("loadPublishedByID() with metadata ID %q error = %v, want invalid metadata ID", metadataID, err)
+		}
+	}
+}
+
+func TestWorkspaceMetadataCannotRedirectStoragePath(t *testing.T) {
+	server, _ := newTestServer(t, model.DefaultConfig())
+	ref, err := server.createWorkspace()
+	if err != nil {
+		t.Fatalf("createWorkspace() error = %v", err)
+	}
+
+	for _, metadataHash := range []string{"..", sha256Hex("another-workspace")} {
+		meta := ref.Meta
+		meta.Hash = metadataHash
+		data, err := json.Marshal(meta)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := storage.AtomicWriteFile(ref.MetaPath, data, 0o600); err != nil {
+			t.Fatalf("write malicious metadata: %v", err)
+		}
+		if _, err := server.loadWorkspaceByHash(ref.Hash); !errors.Is(err, errWorkspaceInvalidMeta) {
+			t.Fatalf("loadWorkspaceByHash() with metadata hash %q error = %v, want invalid metadata", metadataHash, err)
+		}
+	}
+
+	if _, err := server.loadWorkspaceByHash("../outside"); !errors.Is(err, errWorkspaceNotFound) {
+		t.Fatalf("loadWorkspaceByHash(path traversal) error = %v, want workspace not found", err)
 	}
 }
 
@@ -2467,7 +2900,7 @@ func TestGetPublishedByIDAndBindWorkspace(t *testing.T) {
 	}
 	refreshBody := decodeRefreshResponse(t, refreshRec)
 
-	getReq := httptest.NewRequest(http.MethodGet, "/api/published/"+refreshBody.PublishID, nil)
+	getReq := httptest.NewRequest(http.MethodGet, withWorkspace("/api/published/"+refreshBody.PublishID, originalWorkspaceID), nil)
 	getRec := httptest.NewRecorder()
 	server.Handler().ServeHTTP(getRec, getReq)
 	if getRec.Code != http.StatusOK {
@@ -2495,6 +2928,12 @@ func TestGetPublishedByIDAndBindWorkspace(t *testing.T) {
 	}
 
 	restoredWorkspaceID := createWorkspaceForTest(t, server, cfg)
+	wrongGetReq := httptest.NewRequest(http.MethodGet, withWorkspace("/api/published/"+refreshBody.PublishID, restoredWorkspaceID), nil)
+	wrongGetRec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(wrongGetRec, wrongGetReq)
+	if wrongGetRec.Code != http.StatusNotFound {
+		t.Fatalf("published status from unrelated workspace = %d, want %d", wrongGetRec.Code, http.StatusNotFound)
+	}
 	bindBody := bytes.NewBufferString(`{"publish_id":"` + refreshBody.PublishID + `"}`)
 	bindReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+restoredWorkspaceID+"/bind-publish", bindBody)
 	bindReq.Header.Set("Content-Type", "application/json")
@@ -2883,7 +3322,7 @@ func TestDeletePublishedInvalidatesLink(t *testing.T) {
 	server.Handler().ServeHTTP(refreshRec, refreshReq)
 	refreshBody := decodeRefreshResponse(t, refreshRec)
 
-	deleteReq := httptest.NewRequest(http.MethodDelete, "/api/published/"+refreshBody.PublishID, nil)
+	deleteReq := httptest.NewRequest(http.MethodDelete, withWorkspace("/api/published/"+refreshBody.PublishID, workspaceID), nil)
 	deleteRec := httptest.NewRecorder()
 	server.Handler().ServeHTTP(deleteRec, deleteReq)
 	if deleteRec.Code != http.StatusOK {
@@ -2965,6 +3404,38 @@ func TestPublishedAccessCountAndNoStoreHeaders(t *testing.T) {
 	if statusBody.LastAccessAt == "" {
 		t.Fatalf("LastAccessAt is empty")
 	}
+}
+
+func TestPublishedAccessMetadataIsBatched(t *testing.T) {
+	server, _ := newTestServer(t, model.DefaultConfig())
+	published, err := server.createPublished("workspace-hash")
+	if err != nil {
+		t.Fatalf("createPublished() error = %v", err)
+	}
+	if err := storage.AtomicWriteFile(published.CurrentPath, []byte("proxies: []\n"), 0o600); err != nil {
+		t.Fatalf("write published YAML: %v", err)
+	}
+
+	if _, _, shouldLog, err := server.loadPublishedYAML(published.Meta.Token); err != nil || !shouldLog {
+		t.Fatalf("first access err=%v shouldLog=%v, want persisted access", err, shouldLog)
+	}
+	if _, _, shouldLog, err := server.loadPublishedYAML(published.Meta.Token); err != nil || shouldLog {
+		t.Fatalf("second access err=%v shouldLog=%v, want batched access", err, shouldLog)
+	}
+	current, err := server.loadPublishedByID(published.ID)
+	if err != nil {
+		t.Fatalf("loadPublishedByID() error = %v", err)
+	}
+	if current.Meta.AccessCount != 1 {
+		t.Fatalf("persisted access count = %d, want 1 before batch flush", current.Meta.AccessCount)
+	}
+	server.publishedAccessMu.Lock()
+	pending := server.publishedAccess[published.ID].pending
+	server.publishedAccessMu.Unlock()
+	if pending != 1 {
+		t.Fatalf("pending access count = %d, want 1", pending)
+	}
+	server.forgetPublishedAccess(published.ID)
 }
 
 func TestNodeStateDraftAPI(t *testing.T) {

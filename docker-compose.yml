@@ -1,6 +1,25 @@
 services:
+  subconv-data-init:
+    image: alpine:3.23
+    user: "0:0"
+    command: ["sh", "-ec", "chown -R 10001:10001 /data && chmod 0700 /data"]
+    network_mode: none
+    read_only: true
+    restart: "no"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - FOWNER
+      - DAC_OVERRIDE
+    volumes:
+      - ./data:/data
+
   subconv-next:
-    image: ghcr.io/earl9/subconv-next:latest
+    image: ${SUBCONV_IMAGE:-ghcr.io/earl9/subconv-next:latest}
+    user: "10001:10001"
     container_name: subconv-next
     environment:
       SUBCONV_HOST: ${SUBCONV_HOST:-0.0.0.0}
@@ -8,11 +27,30 @@ services:
       SUBCONV_DATA_DIR: ${SUBCONV_DATA_DIR:-/data}
       SUBCONV_PUBLIC_BASE_URL: ${SUBCONV_PUBLIC_BASE_URL:-}
       SUBCONV_LOG_LEVEL: ${SUBCONV_LOG_LEVEL:-info}
+      # Required because the process listens on 0.0.0.0 inside the container.
+      # It is read at startup and is never written back to mounted config.
+      SUBCONV_ACCESS_TOKEN: ${SUBCONV_ACCESS_TOKEN:-}
+      # Public converter mode keeps random workspace isolation and rate limits
+      # while removing login from the normal browser workflow.
+      SUBCONV_PUBLIC_CONVERTER: ${SUBCONV_PUBLIC_CONVERTER:-false}
+      SUBCONV_TRUST_PROXY_HEADERS: ${SUBCONV_TRUST_PROXY_HEADERS:-false}
+      SUBCONV_ALLOW_INSECURE_PUBLIC: ${SUBCONV_ALLOW_INSECURE_PUBLIC:-false}
     restart: unless-stopped
+    depends_on:
+      subconv-data-init:
+        condition: service_completed_successfully
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     ports:
-      - "${SUBCONV_HOST_BIND:-0.0.0.0}:${SUBCONV_PORT:-9876}:${SUBCONV_PORT:-9876}"
+      - "${SUBCONV_HOST_BIND:-127.0.0.1}:${SUBCONV_PORT:-9876}:${SUBCONV_PORT:-9876}"
     volumes:
-      - ./config:/config
+      - ./config:/config:ro
       - ./data:/data
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:$${SUBCONV_PORT:-9876}/healthz >/dev/null || exit 1"]

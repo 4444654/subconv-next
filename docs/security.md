@@ -5,9 +5,24 @@ SubConv Next is a self-hosted subscription converter. It does not provide a publ
 ## Deployment Boundary
 
 - Default development configuration binds the service to `127.0.0.1`.
-- The provided `docker-compose.yml` may be changed to `0.0.0.0:9876:9876` for trusted LAN access.
-- Do not expose the Web UI directly to the public Internet. Put it behind a VPN, reverse proxy with authentication, or another access-control layer.
+- The provided `docker-compose.yml` publishes port `9876` on `127.0.0.1` by default, mounts `/config` read-only, drops Linux capabilities, and uses a read-only root filesystem. A network-disabled one-shot helper prepares the bind-mounted data directory for the unprivileged UID before startup.
+- A configured `SUBCONV_ACCESS_TOKEN` protects the management interface on both private and public peers. The Web UI exchanges it at `/login` for a 12-hour signed HttpOnly, SameSite session cookie; unsafe browser requests require a session-bound CSRF token. API clients may send a Bearer token, proactive HTTP Basic credentials, or `X-SubConv-Access-Token`. Tokens in URL query parameters are rejected.
+- `SUBCONV_PUBLIC_CONVERTER=true` exposes the converter UI and an explicit converter-route allowlist without login. Stateful requests require a cryptographically random workspace capability, publication management requires the owning workspace capability, and anonymous requests receive separate workspace, expensive-operation, and general rate limits.
+- Public workspaces cannot enable private-network subscription fetching, even if a browser submits `allow_lan`; idle anonymous workspaces are capped at six hours and stale published links are cleaned after 30 days without access.
+- If the system resolver returns only a Fake-IP or another reserved address, public mode retries through public DNS resolvers and accepts only validated public addresses. The selected address remains pinned for the request, including after redirects.
+- Public workspace service controls are server-owned: clients cannot raise fetch size or timeout limits, shorten refresh intervals, enable proxy-header trust, or inject management credentials. Each public workspace is limited to 16 subscription sources, 32 manual sources, 512 KiB of manual content, bounded inline custom-rule collections, 5,000 final nodes, and a 4 MiB rendered YAML response. Remote custom-rule snapshots are disabled in public mode. The service retains at most 256 published items.
+- Stateless parsing accepts at most 512 KiB and stateless rendering accepts at most 2,000 nodes. Public stateless rendering uses clean built-in defaults and cannot inherit server-side rule providers, headers, or custom rules. Refresh and state locking is scoped per workspace with a four-job process refresh limit. Logo discovery is limited to eight candidates and a ten-second request budget. Subscription and logo fetches are limited to common HTTP/HTTPS Web ports and re-check DNS/IP and port policy after every redirect.
+- Public mode redirects `/login` to the converter, disables password submissions, returns a minimal `/healthz` payload, and rejects cross-site API reads as well as writes.
+- A published `/s/{token}/...` URL can only download rendered YAML. It cannot restore editable source configuration in public mode. Browser-local drafts use a separate random `publish_id` capability when rebinding an existing publication.
+- `SUBCONV_TRUST_PROXY_HEADERS=true` is safe only when the backend is reachable exclusively through a trusted proxy that rewrites forwarding headers. Otherwise clients can spoof their rate-limit identity.
+- `SUBCONV_ALLOW_INSECURE_PUBLIC=true` is an explicit passwordless preview override. It exposes every management operation to reachable clients and is not a production security boundary.
+- A non-loopback listener requires a management token of at least 24 characters at startup. Private-network and Docker bridge source addresses do not bypass authentication. A tokenless non-loopback preview requires the explicit `SUBCONV_ALLOW_INSECURE_PUBLIC=true` override and must remain local-only.
+- Put public deployments behind a TLS reverse proxy or VPN and do not expose the backend port directly. A reverse proxy must preserve the incoming `Authorization` header.
 - `/healthz` is intentionally unauthenticated and returns only basic service health.
+
+Management responses include CSP, clickjacking, MIME-sniffing, referrer, browser-permission, and cross-origin isolation headers. API responses are `no-store`. Public API and `/s/{token}/...` traffic receive in-process per-client limits. Published token lookup is indexed in memory after a lazy startup scan, while access counters are batched to avoid a metadata write and log entry for every download. Because this state is not shared across replicas, production reverse proxies or edge firewalls must add distributed connection and rate limits.
+
+The UI's Content Security Policy limits script network connections to the same origin. HTTPS images may still be displayed, but subscription and logo content fetched by the server remains subject to private-address, DNS rebinding, redirect, size, timeout, and Web-port checks.
 
 ## Published Subscription Links
 
@@ -47,9 +62,11 @@ Restoring a draft creates a new workspace. If the saved `publish_id` still exist
 The following API surfaces must not expose secrets by default:
 
 - `/api/config` redacts access tokens and subscription URL query values.
+- Public `/api/config`, `/api/status`, and refresh responses omit server filesystem paths and listener details. Nested rule/template/DNS URLs and sensitive rule-provider headers are redacted in configuration responses.
 - `/api/nodes` and node detail responses mask password, uuid, private key, and pre-shared key fields.
 - `/api/logs` returns masked log lines.
-- `/api/published/{publish_id}` returns the current subscription URL for the requested publish, but does not return a raw token field.
+- `/api/published/{publish_id}` requires the owning workspace capability and returns the current subscription URL without a separate raw token field.
+- Updating a redacted Web UI configuration preserves the existing access token instead of replacing it with an empty or masked value.
 
 ## Logging
 
@@ -64,6 +81,8 @@ Masked values include:
 - `password`, `uuid`, `private-key`, `pre-shared-key`, `authorization`, and `cookie` key/value pairs
 
 Log rotation keeps at most three rotated files, each up to 5 MB.
+
+New configuration, workspace metadata, node state, subscription cache, logs, generated YAML, and publication files use owner-only `0600` permissions. Newly created workspace, cache, log, and publication directories use `0700`. Existing files adopt the private mode when the service next rewrites them.
 
 ## YAML Integrity
 

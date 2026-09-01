@@ -10,13 +10,25 @@
 
 ## Security Boundary
 
-SubConv Next is a local or trusted-LAN subscription conversion tool. The V1 Web UI has no built-in login and should not be exposed directly to the public Internet.
+SubConv Next supports local, trusted-LAN, and workspace-isolated public converter deployments. Public deployments must keep the backend port private, terminate HTTPS at a reverse proxy, and add distributed edge rate limits.
 
-For public access, place it behind HTTPS, authentication, a reverse proxy, VPN, or equivalent access control.
+The Web UI exchanges the access token on `/login` for a signed, HttpOnly, SameSite session cookie. Unsafe browser requests also require a session-bound CSRF token. API clients may use `Authorization: Bearer <token>` or send HTTP Basic credentials proactively. `/healthz` and bearer-style `/s/{token}/...` subscription links remain outside the management login boundary. Tokens must never be passed in API query parameters.
+
+Every non-loopback listener requires an access token of at least 24 characters. Loopback, private-network, and Docker bridge source addresses do not bypass this boundary. `SUBCONV_ALLOW_INSECURE_PUBLIC=true` is only an explicit local-preview escape hatch.
+
+`SUBCONV_PUBLIC_CONVERTER=true` allows passwordless use of the converter allowlist. Anonymous state is isolated by cryptographically random workspace capabilities, and publication management requires the owning workspace capability. `SUBCONV_ALLOW_INSECURE_PUBLIC=true` disables the full management boundary and is not supported for Internet-facing production use.
+
+Public mode also enforces server-owned fetch limits, configuration complexity quotas, final-node and rendered-output limits, a bounded publication store, common Web-port restrictions, DNS-rebinding-resistant dialing, cross-site API rejection, and automatic cleanup. The browser login endpoint is disabled in this mode; protected API routes continue to accept the management Bearer token.
+
+A published `/s/{token}/...` link only authorizes downloading rendered YAML. Public mode does not allow that link to restore the editable workspace or reveal upstream URLs, credentials, or manual source content. Editable recovery is limited to browser-local drafts and the separate high-entropy `publish_id` capability stored by those drafts.
 
 ## Sensitive Data
 
 SubConv Next attempts to redact sensitive values in APIs and logs, including upstream subscription URL tokens, published subscription tokens, passwords, UUIDs, WireGuard private keys, pre-shared keys, `Authorization`, and `Cookie` values.
+
+New runtime configuration, node state, cache, logs, generated YAML, and publication metadata are written with owner-only permissions. Deployments should also restrict access to the mounted `/data` directory and Docker daemon.
+
+The published container runs as the unprivileged `10001:10001` user with a read-only root filesystem, all Linux capabilities dropped, and `no-new-privileges`. The writable `/data` volume must be owned by that UID/GID.
 
 Do not publish real subscription URLs, tokens, node secrets, or unredacted logs in public issues.
 

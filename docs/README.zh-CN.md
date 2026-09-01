@@ -59,21 +59,24 @@ services:
     container_name: subconv-next
     restart: unless-stopped
     ports:
-      - "9876:9876"
+      - "127.0.0.1:9876:9876"
     volumes:
-      - ./config:/config
+      - ./config:/config:ro
       - ./data:/data
     environment:
       SUBCONV_HOST: 0.0.0.0
       SUBCONV_PORT: 9876
       SUBCONV_DATA_DIR: /data
       SUBCONV_LOG_LEVEL: info
+      SUBCONV_ACCESS_TOKEN: ${SUBCONV_ACCESS_TOKEN:-}
+      SUBCONV_PUBLIC_CONVERTER: ${SUBCONV_PUBLIC_CONVERTER:-false}
 ```
 
 启动并检查健康状态：
 
 ```sh
 mkdir -p config data
+export SUBCONV_ACCESS_TOKEN="$(openssl rand -hex 32)"
 docker compose up -d
 curl -fsS http://127.0.0.1:9876/healthz
 ```
@@ -118,7 +121,7 @@ curl -fsS http://127.0.0.1:9876/healthz
 
 ## 安全说明
 
-独立 Web UI 没有内置账户系统。请在本机或可信局域网中运行；需要对外开放时，应放在 HTTPS、认证反向代理、VPN 或等效访问控制之后。LuCI 使用路由器现有登录认证和 rpcd ACL 权限模型。
+Compose 默认只把端口绑定到 `127.0.0.1`，`/config` 以只读方式挂载，并启用只读根文件系统与 capability drop。需要公开匿名转换时设置 `SUBCONV_PUBLIC_CONVERTER=true` 并保留高强度 `SUBCONV_ACCESS_TOKEN`：访客无需登录，每个访客使用独立的高强度随机工作区，转换接口按来源限速，未列入公开转换白名单的路由仍由管理令牌保护。公开模式会限制空闲工作区最多 6 小时，并清理连续 30 天未访问的发布链接。公网入口仍应由反向代理终止 HTTPS、实施分布式限流，并避免直接暴露 9876 端口。不要在生产环境使用 `SUBCONV_ALLOW_INSECURE_PUBLIC=true`，它会关闭整个管理边界。LuCI 继续使用路由器现有登录认证和 rpcd ACL 权限模型。
 
 发布订阅 URL 是 bearer link。任何持有有效 `/s/{token}/mihomo.yaml` URL 的人都可以获取生成配置。链接泄露后请在 Web UI 中轮换。
 

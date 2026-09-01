@@ -13,7 +13,15 @@ import (
 	"subconv-next/internal/renderer"
 )
 
-var ErrRefreshInProgress = errors.New("refresh is already running")
+var (
+	ErrRefreshInProgress = errors.New("refresh is already running")
+	ErrRefreshCapacity   = errors.New("refresh capacity is currently full")
+)
+
+const (
+	maxConcurrentRefreshes = 4
+	serviceRefreshKey      = "\x00service"
+)
 
 type refreshOutcome struct {
 	Result pipeline.RenderResult
@@ -59,19 +67,28 @@ func (s *Server) startRefresh(reason string) (*refreshOutcome, error) {
 }
 
 func (s *Server) startRefreshForConfig(cfg model.Config, workspaceHash, reason string) (*refreshOutcome, error) {
+	keys := refreshRunKeys(cfg, workspaceHash)
 	s.refreshMu.Lock()
-	if s.refreshRunning {
-		done := s.refreshDone
-		s.refreshMu.Unlock()
-		_ = done
-		return nil, ErrRefreshInProgress
+	for _, key := range keys {
+		if _, running := s.refreshRuns[key]; running {
+			s.refreshMu.Unlock()
+			return nil, ErrRefreshInProgress
+		}
 	}
-	s.refreshRunning = true
-	s.refreshDone = make(chan struct{})
+	select {
+	case s.refreshSlots <- struct{}{}:
+	default:
+		s.refreshMu.Unlock()
+		return nil, ErrRefreshCapacity
+	}
+	done := make(chan struct{})
+	for _, key := range keys {
+		s.refreshRuns[key] = done
+	}
+	s.setRefreshing(true)
 	s.refreshMu.Unlock()
 
-	s.setRefreshing(true)
-	defer s.finishRefresh()
+	defer s.finishRefresh(keys, done)
 
 	outcome, err := s.executeRefresh(cfg, workspaceHash, reason)
 	if err != nil {
@@ -80,24 +97,43 @@ func (s *Server) startRefreshForConfig(cfg model.Config, workspaceHash, reason s
 	return outcome, nil
 }
 
-func (s *Server) finishRefresh() {
-	s.setRefreshing(false)
+func refreshRunKeys(cfg model.Config, workspaceHash string) []string {
+	keys := make([]string, 0, 2)
+	if workspaceHash = strings.TrimSpace(workspaceHash); workspaceHash == "" {
+		keys = append(keys, serviceRefreshKey)
+	} else {
+		keys = append(keys, "workspace:"+workspaceHash)
+	}
+	if outputPath := strings.TrimSpace(cfg.Service.OutputPath); outputPath != "" {
+		keys = append(keys, "output:"+filepath.Clean(outputPath))
+	}
+	return keys
+}
+
+func (s *Server) finishRefresh(keys []string, done chan struct{}) {
 	s.refreshMu.Lock()
-	done := s.refreshDone
-	s.refreshRunning = false
-	s.refreshDone = nil
+	released := false
+	for _, key := range keys {
+		if s.refreshRuns[key] == done {
+			delete(s.refreshRuns, key)
+			released = true
+		}
+	}
+	if released {
+		<-s.refreshSlots
+	}
+	s.setRefreshing(len(s.refreshSlots) > 0)
 	s.refreshMu.Unlock()
-	if done != nil {
+	if released {
 		close(done)
 	}
 }
 
 func (s *Server) waitForRefresh(timeout time.Duration) bool {
 	s.refreshMu.Lock()
-	done := s.refreshDone
-	running := s.refreshRunning
+	done := s.refreshRuns[serviceRefreshKey]
 	s.refreshMu.Unlock()
-	if !running || done == nil {
+	if done == nil {
 		return true
 	}
 
@@ -220,6 +256,17 @@ func (s *Server) executeRefresh(cfg model.Config, workspaceHash, reason string) 
 }
 
 func (s *Server) refreshPublishedWorkspace(ref workspaceRef, reason string) (*refreshOutcome, publishedRef, error) {
+	workspaceHash := strings.TrimSpace(ref.Hash)
+	if workspaceHash == "" {
+		return nil, publishedRef{}, errWorkspaceNotFound
+	}
+	unlock := s.lockWorkspaceHash(workspaceHash)
+	defer unlock()
+	currentRef, err := s.loadWorkspaceByHash(workspaceHash)
+	if err != nil {
+		return nil, publishedRef{}, err
+	}
+	ref = currentRef
 	publishID := strings.TrimSpace(ref.Meta.PublishID)
 	if publishID == "" {
 		return nil, publishedRef{}, errWorkspaceNotFound
@@ -327,7 +374,7 @@ func (s *Server) StartScheduler(stop <-chan struct{}) {
 				return
 			case <-timer.C:
 				_, err := s.startRefresh("scheduled refresh")
-				if err != nil && !errors.Is(err, ErrRefreshInProgress) {
+				if err != nil && !errors.Is(err, ErrRefreshInProgress) && !errors.Is(err, ErrRefreshCapacity) {
 					s.appendLog("scheduled refresh failed: " + err.Error())
 				}
 				s.refreshPublishedWorkspaces("scheduled published refresh")

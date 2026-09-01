@@ -79,7 +79,7 @@ func fetchLatestRelease(ctx context.Context) (githubLatestReleaseResponse, error
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("User-Agent", "subconv-next-update-check")
 
-	resp, err := updateCheckHTTPClient.Do(req)
+	resp, err := doUpdateCheckRequest(req)
 	if err != nil {
 		return githubLatestReleaseResponse{}, err
 	}
@@ -100,6 +100,7 @@ func fetchLatestRelease(ctx context.Context) (githubLatestReleaseResponse, error
 	if strings.TrimSpace(release.TagName) == "" {
 		return githubLatestReleaseResponse{}, fmt.Errorf("latest release tag is empty")
 	}
+	release.HTMLURL = sanitizeReleaseURL(release.HTMLURL)
 	return release, nil
 }
 
@@ -110,7 +111,7 @@ func fetchLatestReleaseFromRedirect(ctx context.Context) (githubLatestReleaseRes
 	}
 	req.Header.Set("User-Agent", "subconv-next-update-check")
 
-	resp, err := updateCheckHTTPClient.Do(req)
+	resp, err := doUpdateCheckRequest(req)
 	if err != nil {
 		return githubLatestReleaseResponse{}, err
 	}
@@ -137,6 +138,47 @@ func fetchLatestReleaseFromRedirect(ctx context.Context) (githubLatestReleaseRes
 		Name:    tag,
 		HTMLURL: resp.Request.URL.String(),
 	}, nil
+}
+
+func doUpdateCheckRequest(req *http.Request) (*http.Response, error) {
+	if req == nil || req.URL == nil {
+		return nil, fmt.Errorf("update check request URL is required")
+	}
+	baseClient := updateCheckHTTPClient
+	if baseClient == nil {
+		baseClient = http.DefaultClient
+	}
+	client := *baseClient
+	existingRedirectPolicy := client.CheckRedirect
+	initialURL := *req.URL
+	client.CheckRedirect = func(next *http.Request, via []*http.Request) error {
+		if len(via) >= 5 {
+			return fmt.Errorf("update check stopped after too many redirects")
+		}
+		if next.URL == nil || next.URL.User != nil ||
+			!strings.EqualFold(next.URL.Scheme, initialURL.Scheme) ||
+			!sameOriginAuthority(next.URL, &initialURL) {
+			return fmt.Errorf("update check rejected a cross-origin redirect")
+		}
+		if existingRedirectPolicy != nil {
+			return existingRedirectPolicy(next, via)
+		}
+		return nil
+	}
+	return client.Do(req)
+}
+
+func sanitizeReleaseURL(raw string) string {
+	candidate, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || candidate.User != nil || candidate.Host == "" ||
+		(!strings.EqualFold(candidate.Scheme, "http") && !strings.EqualFold(candidate.Scheme, "https")) {
+		return ""
+	}
+	expected, err := url.Parse(strings.TrimSpace(latestReleasePageURL))
+	if err != nil || expected.Host == "" || !strings.EqualFold(candidate.Scheme, expected.Scheme) || !sameOriginAuthority(candidate, expected) {
+		return ""
+	}
+	return candidate.String()
 }
 
 var versionNumberPattern = regexp.MustCompile(`\d+`)

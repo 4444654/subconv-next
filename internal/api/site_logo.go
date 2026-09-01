@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"subconv-next/internal/fetcher"
 	"subconv-next/internal/model"
 )
 
@@ -36,7 +37,11 @@ type iconCandidate struct {
 
 var linkTagPattern = regexp.MustCompile(`(?is)<link\b[^>]*>`)
 
-const maxSiteLogoCacheEntries = 256
+const (
+	maxSiteLogoCacheEntries = 256
+	maxSiteLogoCandidates   = 8
+	siteLogoResolveTimeout  = 10 * time.Second
+)
 
 type siteLogoResolver interface {
 	LookupIPAddr(context.Context, string) ([]net.IPAddr, error)
@@ -54,7 +59,9 @@ func (s *Server) handleSiteLogo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	payload, err := s.resolveSiteLogo(rawURL)
+	ctx, cancel := context.WithTimeout(r.Context(), siteLogoResolveTimeout)
+	defer cancel()
+	payload, err := s.resolveSiteLogoContext(ctx, rawURL)
 	if err != nil {
 		writeAPIError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
 		return
@@ -63,6 +70,10 @@ func (s *Server) handleSiteLogo(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) resolveSiteLogo(rawURL string) (siteLogoResponse, error) {
+	return s.resolveSiteLogoContext(context.Background(), rawURL)
+}
+
+func (s *Server) resolveSiteLogoContext(ctx context.Context, rawURL string) (siteLogoResponse, error) {
 	parsed, err := parseSiteLogoURL(rawURL)
 	if err != nil {
 		return siteLogoResponse{}, err
@@ -84,13 +95,13 @@ func (s *Server) resolveSiteLogo(rawURL string) (siteLogoResponse, error) {
 		Source: "fallback",
 	}
 
-	if !siteLogoHostAllowed(domain) {
+	if !siteLogoHostAllowedWithResolver(ctx, net.DefaultResolver, domain) {
 		s.storeSiteLogoCache(cacheKey, payload)
 		return payload, nil
 	}
 
 	home := &url.URL{Scheme: parsed.Scheme, Host: parsed.Host}
-	if logoURL, source, ok := fetchBestSiteLogo(home); ok {
+	if logoURL, source, ok := fetchBestSiteLogoContext(ctx, home); ok {
 		payload.LogoURL = logoURL
 		payload.Source = source
 	}
@@ -154,6 +165,9 @@ func parseSiteLogoURL(raw string) (*url.URL, error) {
 	if parsed.User != nil {
 		return nil, fmt.Errorf("url credentials are not allowed")
 	}
+	if err := fetcher.ValidatePublicURL(parsed.String()); err != nil {
+		return nil, err
+	}
 	return parsed, nil
 }
 
@@ -174,7 +188,7 @@ func siteLogoHostAllowedWithResolver(ctx context.Context, resolver siteLogoResol
 	}
 	for _, ipAddr := range ips {
 		ip := ipAddr.IP
-		if ip == nil || ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalMulticast() || ip.IsLinkLocalUnicast() || ip.IsMulticast() || ip.IsUnspecified() {
+		if !fetcher.IsPublicIP(ip) {
 			return false
 		}
 	}
@@ -182,19 +196,26 @@ func siteLogoHostAllowedWithResolver(ctx context.Context, resolver siteLogoResol
 }
 
 func fetchBestSiteLogo(home *url.URL) (string, string, bool) {
+	return fetchBestSiteLogoContext(context.Background(), home)
+}
+
+func fetchBestSiteLogoContext(ctx context.Context, home *url.URL) (string, string, bool) {
 	client := newSiteLogoHTTPClient(net.DefaultResolver)
 	defer client.CloseIdleConnections()
-	html, contentType, ok := fetchSiteDocument(client, home)
+	html, contentType, ok := fetchSiteDocumentContext(ctx, client, home)
 	if ok && strings.Contains(strings.ToLower(contentType), "html") {
 		for _, candidate := range discoverSiteLogoCandidates(home, html) {
-			if logo, ok := fetchLogoAsDataURL(client, candidate.URL); ok {
+			if ctx.Err() != nil {
+				return "", "", false
+			}
+			if logo, ok := fetchLogoAsDataURLContext(ctx, client, candidate.URL); ok {
 				return logo, candidate.Source, true
 			}
 		}
 	}
 
 	faviconURL := home.ResolveReference(&url.URL{Path: "/favicon.ico"})
-	if logo, ok := fetchLogoAsDataURL(client, faviconURL); ok {
+	if logo, ok := fetchLogoAsDataURLContext(ctx, client, faviconURL); ok {
 		return logo, "favicon", true
 	}
 	return "", "", false
@@ -255,6 +276,9 @@ func validateSiteLogoTarget(ctx context.Context, resolver siteLogoResolver, targ
 	if target == nil || (target.Scheme != "http" && target.Scheme != "https") || target.User != nil {
 		return fmt.Errorf("unsafe site logo target")
 	}
+	if err := fetcher.ValidatePublicURL(target.String()); err != nil {
+		return fmt.Errorf("unsafe site logo target: %w", err)
+	}
 	if !siteLogoHostAllowedWithResolver(ctx, resolver, target.Hostname()) {
 		return fmt.Errorf("site logo target is not publicly routable")
 	}
@@ -285,12 +309,24 @@ func resolveSiteLogoDialTarget(ctx context.Context, resolver siteLogoResolver, a
 }
 
 func siteLogoIPBlocked(ip net.IP) bool {
-	return ip == nil || ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalMulticast() ||
-		ip.IsLinkLocalUnicast() || ip.IsMulticast() || ip.IsUnspecified()
+	return !fetcher.IsPublicIP(ip)
 }
 
 func fetchSiteDocument(client *http.Client, target *url.URL) ([]byte, string, bool) {
-	req, err := http.NewRequest(http.MethodGet, target.String(), nil)
+	return fetchSiteDocumentContext(context.Background(), client, target)
+}
+
+func fetchSiteDocumentContext(ctx context.Context, client *http.Client, target *url.URL) ([]byte, string, bool) {
+	if target == nil || fetcher.ValidatePublicURL(target.String()) != nil {
+		return nil, "", false
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if ctx.Err() != nil {
+		return nil, "", false
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target.String(), nil)
 	if err != nil {
 		return nil, "", false
 	}
@@ -343,6 +379,9 @@ func discoverSiteLogoCandidates(base *url.URL, html []byte) []iconCandidate {
 		}
 		seen[key] = struct{}{}
 		candidates = append(candidates, iconCandidate{URL: resolved, Source: source})
+		if len(candidates) >= maxSiteLogoCandidates {
+			break
+		}
 	}
 	return candidates
 }
@@ -359,10 +398,20 @@ func extractHTMLAttribute(tag, attr string) string {
 }
 
 func fetchLogoAsDataURL(client *http.Client, target *url.URL) (string, bool) {
-	if target == nil {
+	return fetchLogoAsDataURLContext(context.Background(), client, target)
+}
+
+func fetchLogoAsDataURLContext(ctx context.Context, client *http.Client, target *url.URL) (string, bool) {
+	if target == nil || fetcher.ValidatePublicURL(target.String()) != nil {
 		return "", false
 	}
-	req, err := http.NewRequest(http.MethodGet, target.String(), nil)
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if ctx.Err() != nil {
+		return "", false
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target.String(), nil)
 	if err != nil {
 		return "", false
 	}

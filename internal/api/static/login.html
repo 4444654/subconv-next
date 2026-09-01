@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light" />
+    <title>登录 · SubConv Next</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/login.css" />
+  </head>
+  <body>
+    <main class="login-shell">
+      <section class="login-panel" aria-labelledby="login-title">
+        <header class="login-brand">
+          <span class="login-mark" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none">
+              <circle cx="7.2" cy="7.4" r="2.7" fill="currentColor"></circle>
+              <circle cx="16.8" cy="16.6" r="2.7" fill="currentColor"></circle>
+              <path d="M9.7 7.4h2.1a4.2 4.2 0 0 1 4.2 4.2v2.2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path>
+              <path d="m12.3 16.6 3.7-3.7m-3.7 3.7h3.7v-3.7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path>
+            </svg>
+          </span>
+          <span>SubConv Next</span>
+        </header>
+
+        <div class="login-heading">
+          <span class="access-label">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <rect x="4" y="10" width="16" height="11" rx="2"></rect>
+              <path d="M8 10V7a4 4 0 0 1 8 0v3"></path>
+            </svg>
+            管理端
+          </span>
+          <h1 id="login-title">验证管理密码</h1>
+          <p>仅限授权管理人员访问。</p>
+        </div>
+
+        <form id="login-form" novalidate>
+          <label for="password">管理密码</label>
+          <div class="password-control">
+            <input id="password" name="password" type="password" autocomplete="current-password" required disabled />
+            <button id="toggle-password" class="visibility-button" type="button" aria-label="显示密码" title="显示密码" disabled>
+              <svg class="eye-open" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12Z"></path>
+                <circle cx="12" cy="12" r="2.5"></circle>
+              </svg>
+              <svg class="eye-closed" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="m3 3 18 18"></path>
+                <path d="M10.6 6.2A10.8 10.8 0 0 1 12 6c6.5 0 10 6 10 6a17.6 17.6 0 0 1-2.1 2.8"></path>
+                <path d="M6.6 6.6C3.6 8.5 2 12 2 12s3.5 6 10 6c1.6 0 3-.4 4.2-1"></path>
+              </svg>
+            </button>
+          </div>
+          <p id="login-message" class="login-message" role="alert" aria-live="polite"></p>
+          <button id="login-submit" class="login-submit" type="submit" disabled>
+            <span>登录</span>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M5 12h14"></path>
+              <path d="m14 7 5 5-5 5"></path>
+            </svg>
+          </button>
+        </form>
+
+        <footer class="login-foot">
+          <span class="foot-dot" aria-hidden="true"></span>
+          <span>会话有效期 12 小时</span>
+        </footer>
+      </section>
+    </main>
+
+    <script src="/login.js" defer></script>
+  </body>
+</html>

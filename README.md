@@ -59,21 +59,24 @@ services:
     container_name: subconv-next
     restart: unless-stopped
     ports:
-      - "9876:9876"
+      - "127.0.0.1:9876:9876"
     volumes:
-      - ./config:/config
+      - ./config:/config:ro
       - ./data:/data
     environment:
       SUBCONV_HOST: 0.0.0.0
       SUBCONV_PORT: 9876
       SUBCONV_DATA_DIR: /data
       SUBCONV_LOG_LEVEL: info
+      SUBCONV_ACCESS_TOKEN: ${SUBCONV_ACCESS_TOKEN:-}
+      SUBCONV_PUBLIC_CONVERTER: ${SUBCONV_PUBLIC_CONVERTER:-false}
 ```
 
 Start the service and check its health:
 
 ```sh
 mkdir -p config data
+export SUBCONV_ACCESS_TOKEN="$(openssl rand -hex 32)"
 docker compose up -d
 curl -fsS http://127.0.0.1:9876/healthz
 ```
@@ -118,7 +121,7 @@ Release artifacts are published through [GitHub Releases](https://github.com/Ear
 
 ## Security
 
-The standalone Web UI has no built-in account system. Run it on localhost or a trusted LAN, or place it behind HTTPS and an authenticated reverse proxy, VPN, or equivalent access control. LuCI access uses the router's existing authentication and rpcd ACL model.
+The supplied Compose file binds the host port to `127.0.0.1` by default, mounts `/config` read-only, drops Linux capabilities, and uses a read-only container filesystem. For a public converter, enable `SUBCONV_PUBLIC_CONVERTER=true`, keep a strong `SUBCONV_ACCESS_TOKEN` for protected routes, terminate HTTPS at a reverse proxy, keep port `9876` private, and add distributed edge rate limits. Anonymous visitors receive independent random workspaces; approved converter routes are public while routes outside that allowlist still require the management token. `SUBCONV_ALLOW_INSECURE_PUBLIC` disables the entire management boundary and is not suitable for production.
 
 Published subscription URLs are bearer links. Anyone holding a valid `/s/{token}/mihomo.yaml` URL can retrieve its generated configuration. Rotate the link from the Web UI if it is exposed.
 

@@ -33,6 +33,17 @@ func TestDetect(t *testing.T) {
 	}
 }
 
+func TestParseContentRejectsHTMLWithoutLoggingResponseBody(t *testing.T) {
+	content := []byte(`<!doctype html><html><body><a href="https://example.com/">Example</a></body></html>`)
+	result := ParseContent(content, model.SourceInfo{Name: "html", Kind: "test"})
+	if len(result.Errors) != 1 {
+		t.Fatalf("Errors = %#v, want one invalid URI error", result.Errors)
+	}
+	if result.Errors[0].Message != "invalid URI scheme" {
+		t.Fatalf("error message = %q, want fixed invalid URI message", result.Errors[0].Message)
+	}
+}
+
 func TestParseContentVLESSReality(t *testing.T) {
 	content := []byte("vless://uuid-1@example.com:443?security=reality&sni=example.com&fp=chrome&pbk=pub&sid=abcd&type=tcp&flow=xtls-rprx-vision#HK Node")
 	result := ParseContent(content, model.SourceInfo{Name: "manual", Kind: "inline"})

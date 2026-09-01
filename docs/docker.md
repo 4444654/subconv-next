@@ -5,6 +5,7 @@ SubConv Next is Docker-first for V1. The image contains the Go binary and embedd
 ## Quick Start
 
 ```sh
+export SUBCONV_ACCESS_TOKEN="$(openssl rand -hex 32)"
 docker compose up -d
 curl -fsS http://127.0.0.1:9876/healthz
 ```
@@ -15,23 +16,35 @@ Open:
 http://127.0.0.1:9876/
 ```
 
-The image runs `/usr/bin/subconv-next` directly. It does not include a Go toolchain or Node.js runtime in the final stage.
+The image runs `/usr/bin/subconv-next` directly. It does not include a Go toolchain, Node.js runtime, or a baked-in runtime configuration. If `/config/config.json` is absent, the process starts from built-in defaults and applies environment overrides.
 
-For trusted LAN access, keep the default compose port mapping:
+The runtime process uses the unprivileged UID/GID `10001:10001`. Compose runs a short-lived, network-disabled `subconv-data-init` service before the application starts; it grants UID/GID `10001:10001` ownership of the existing `./data` tree and then exits. If an existing configuration file is not readable by that account, adjust it once before upgrading:
 
-```yaml
-ports:
-  - "0.0.0.0:9876:9876"
+```sh
+sudo chown root:10001 ./config/config.json
+sudo chmod 0640 ./config/config.json
 ```
 
-For local-only access, change it to:
+The supplied Compose file publishes the host port only on loopback by default. Because the process listens on `0.0.0.0` inside the container, it still requires a strong access token:
 
 ```yaml
 ports:
   - "127.0.0.1:9876:9876"
 ```
 
-For public internet deployment, put SubConv Next behind a TLS reverse proxy and set `SUBCONV_PUBLIC_BASE_URL` to the public HTTPS origin. Do not publish it without firewall, TLS, and access controls appropriate for your environment.
+For trusted LAN access, explicitly set `SUBCONV_HOST_BIND` and an access token:
+
+```sh
+export SUBCONV_HOST_BIND=0.0.0.0
+export SUBCONV_ACCESS_TOKEN="$(openssl rand -hex 32)"
+docker compose up -d
+```
+
+For a public passwordless converter, keep `9876` bound to `127.0.0.1`, put SubConv Next behind a TLS reverse proxy, and set `SUBCONV_PUBLIC_CONVERTER=true`, `SUBCONV_PUBLIC_BASE_URL`, and a strong `SUBCONV_ACCESS_TOKEN` for protected routes. Anonymous visitors use independent random workspaces. Do not publish port `9876` directly, and add distributed rate limits at the public edge because the built-in limiter is per process.
+
+The backend deliberately leaves `/healthz` and `/s/{token}/...` outside the management login boundary. Published subscription URLs are bearer credentials and must be kept private.
+
+For a temporary tokenless local preview, set `SUBCONV_ALLOW_INSECURE_PUBLIC=true` explicitly. This disables the management boundary and must never be used when the host port is reachable from another machine.
 
 ## Persistence
 
@@ -39,7 +52,7 @@ The runtime data directory is `/data`:
 
 ```yaml
 volumes:
-  - ./config:/config
+  - ./config:/config:ro
   - ./data:/data
 ```
 
@@ -50,7 +63,7 @@ Published subscriptions are stored under:
 /data/published/{publish_id}/meta.json
 ```
 
-Keep `./data` mounted. Without this volume, published links and workspace state are lost on container removal.
+Keep `./data` mounted. Without this volume, published links and workspace state are lost on container removal. The initialization service changes ownership only inside this dedicated data directory; it has no network and runs with only the filesystem capabilities required for that migration.
 
 To verify persistence, generate a subscription link, restart the container, then request the same link again:
 
@@ -86,14 +99,42 @@ Docker supports these environment variables:
 | `SUBCONV_DATA_DIR` | `/data` | Runtime state, cache, logs, and published subscriptions. |
 | `SUBCONV_PUBLIC_BASE_URL` | empty | Public origin used in generated subscription links. |
 | `SUBCONV_LOG_LEVEL` | `info` | Service and render log level. |
+| `SUBCONV_ACCESS_TOKEN` | empty | Management UI/API token. Required and at least 24 characters when `SUBCONV_HOST` is non-loopback, including the default container listener. |
+| `SUBCONV_PUBLIC_CONVERTER` | `false` | Expose the workspace-isolated converter UI without a login. |
+| `SUBCONV_TRUST_PROXY_HEADERS` | `false` | Use the first `X-Forwarded-For`/`X-Real-IP` address for built-in limits. Enable only when the backend is reachable exclusively through a trusted proxy. |
+| `SUBCONV_ALLOW_INSECURE_PUBLIC` | `false` | Disable management login on a non-loopback listener. Preview use only. |
 
 Example:
 
 ```sh
-SUBCONV_PUBLIC_BASE_URL=https://subconv.example.com docker compose up -d
+SUBCONV_ACCESS_TOKEN="$(openssl rand -hex 32)" \
+SUBCONV_PUBLIC_CONVERTER=true \
+SUBCONV_PUBLIC_BASE_URL=https://subconv.example.com \
+docker compose up -d
 ```
 
 `SUBCONV_PUBLIC_BASE_URL` only changes generated subscription links returned by the API. It does not configure TLS or reverse proxy behavior.
+
+`SUBCONV_PUBLIC_CONVERTER=true` is the supported passwordless mode. It exposes only the converter allowlist and requires random workspace capabilities for stateful operations. `SUBCONV_ALLOW_INSECURE_PUBLIC=true` exposes every management operation to every reachable client and must not be used for an Internet-facing production deployment.
+
+Public mode caps idle anonymous workspaces at six hours and treats published links as stale after 30 days without access. Set `SUBCONV_TRUST_PROXY_HEADERS=true` only when port `9876` is firewalled from the Internet and the reverse proxy strips and rewrites forwarding headers.
+
+Public-mode resource policy is intentionally fixed by the server. A workspace may contain at most 16 subscription sources and 32 manual sources, manual content is capped at 512 KiB, final output is capped at 5,000 nodes and 4 MiB, and the service retains at most 256 published items. Stateless public rendering starts from clean built-in defaults and never inherits server rule providers or headers. Remote custom-rule snapshots are disabled; use inline rules or runtime rule providers instead. Refreshes and state changes are isolated per workspace with a four-job process refresh limit. Published subscription downloads are rate-limited per client; token lookup uses an in-memory hash index after a lazy startup scan, and access metadata is written in batches. Logo discovery checks at most eight candidates within a ten-second request budget. Outbound subscription and logo requests are limited to common HTTP/HTTPS Web ports; private, loopback, link-local, multicast, and cloud metadata targets remain blocked after DNS resolution and redirects.
+
+When the host resolver returns only a Clash/Mihomo Fake-IP or another reserved address, public converter mode retries DNS resolution through public resolvers and still pins the validated public address for the outbound request. This avoids false SSRF rejections without allowing requests to private or reserved networks.
+
+Published subscription URLs are download-only bearer credentials in public mode. They cannot be used to recover source URLs, manual node content, or the editable workspace. Keep browser-local drafts if editable recovery is required.
+
+For Nginx, preserve cookies and the incoming `Authorization` header so browser sessions and Bearer API credentials both reach the backend:
+
+```nginx
+location / {
+    proxy_pass http://127.0.0.1:9876;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto https;
+    proxy_set_header Authorization $http_authorization;
+}
+```
 
 ## Runtime Flags
 
@@ -119,6 +160,12 @@ Expected shape:
 
 ```json
 {"ok":true,"version":"...","data_dir":"/data","uptime_seconds":1}
+```
+
+In public converter mode, the response is intentionally smaller:
+
+```json
+{"ok":true,"uptime_seconds":1}
 ```
 
 The health response does not include subscription URLs, published tokens, upstream URLs, or node secrets.

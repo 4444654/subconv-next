@@ -1,6 +1,7 @@
 package config
 
 import (
+	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -552,5 +553,39 @@ func TestValidateSubscriptionNameAndURL(t *testing.T) {
 	}
 	if err := Validate(cfg); err == nil {
 		t.Fatalf("Validate() error = nil, want duplicate subscription id restriction")
+	}
+}
+
+func TestValidatePublicBaseURL(t *testing.T) {
+	cfg := Normalize(model.DefaultConfig())
+	for _, invalid := range []string{
+		"javascript://example.com",
+		"https://user:password@example.com",
+		"https://example.com?token=secret",
+		"https://example.com/#fragment",
+	} {
+		cfg.Service.PublicBaseURL = invalid
+		if err := Validate(cfg); err == nil {
+			t.Fatalf("Validate(public_base_url=%q) error = nil", invalid)
+		}
+	}
+	cfg.Service.PublicBaseURL = "https://subconv.example.com/base"
+	if err := Validate(cfg); err != nil {
+		t.Fatalf("Validate(valid public_base_url) error = %v", err)
+	}
+}
+
+func TestWriteJSONUsesPrivatePermissions(t *testing.T) {
+	cfg := Normalize(model.DefaultConfig())
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := WriteJSON(path, cfg); err != nil {
+		t.Fatalf("WriteJSON() error = %v", err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("Stat() error = %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("mode = %#o, want %#o", got, 0o600)
 	}
 }

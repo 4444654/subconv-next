@@ -19,7 +19,7 @@ func WriteJSON(path string, cfg model.Config) error {
 	}
 	data = append(data, '\n')
 
-	if err := storage.AtomicWriteFile(path, data, 0o644); err != nil {
+	if err := storage.AtomicWriteFile(path, data, 0o600); err != nil {
 		return fmt.Errorf("write config: %w", err)
 	}
 	return nil

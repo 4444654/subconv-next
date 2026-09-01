@@ -104,8 +104,12 @@ func parseURI(raw string, source model.SourceInfo) (model.NodeIR, error) {
 	if schemeEnd <= 0 {
 		return model.NodeIR{}, fmt.Errorf("missing scheme")
 	}
+	scheme := raw[:schemeEnd]
+	if !validURIScheme(scheme) {
+		return model.NodeIR{}, fmt.Errorf("invalid URI scheme")
+	}
 
-	switch strings.ToLower(raw[:schemeEnd]) {
+	switch strings.ToLower(scheme) {
 	case string(model.ProtocolSS):
 		return parseSS(raw, source)
 	case string(model.ProtocolSSR):
@@ -133,8 +137,24 @@ func parseURI(raw string, source model.SourceInfo) (model.NodeIR, error) {
 	case string(model.ProtocolSOCKS5):
 		return parseSOCKS5Proxy(raw, source)
 	default:
-		return model.NodeIR{}, fmt.Errorf("unsupported scheme %q", raw[:schemeEnd])
+		return model.NodeIR{}, fmt.Errorf("unsupported scheme %q", scheme)
 	}
+}
+
+func validURIScheme(value string) bool {
+	if value == "" || len(value) > 32 {
+		return false
+	}
+	for index, char := range value {
+		if (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') {
+			continue
+		}
+		if index > 0 && ((char >= '0' && char <= '9') || char == '+' || char == '-' || char == '.') {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func newBaseNode(protocol model.Protocol, source model.SourceInfo) model.NodeIR {

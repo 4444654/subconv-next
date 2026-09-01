@@ -43,8 +43,16 @@ type workspaceRef struct {
 }
 
 var (
-	errWorkspaceRequired = errors.New("workspace is required")
-	errWorkspaceNotFound = errors.New("workspace not found or expired")
+	errWorkspaceRequired     = errors.New("workspace is required")
+	errWorkspaceNotFound     = errors.New("workspace not found or expired")
+	errWorkspaceLimitReached = errors.New("workspace limit reached")
+	errWorkspaceInvalidMeta  = errors.New("invalid workspace metadata")
+)
+
+const (
+	publicMaxSubscriptionBytes = 2 * 1024 * 1024
+	publicMaxFetchTimeout      = 15
+	publicMinRefreshInterval   = 15 * 60
 )
 
 func (s *Server) baseDataDir() string {
@@ -96,9 +104,50 @@ func (s *Server) buildWorkspaceRefByHash(hash string) workspaceRef {
 	return ref
 }
 
+func validWorkspaceHash(hash string) bool {
+	hash = strings.TrimSpace(hash)
+	if len(hash) != sha256.Size*2 {
+		return false
+	}
+	for _, char := range hash {
+		if !((char >= '0' && char <= '9') || (char >= 'a' && char <= 'f')) {
+			return false
+		}
+	}
+	return true
+}
+
+func validateWorkspaceRefIdentity(ref workspaceRef) error {
+	if !validWorkspaceHash(ref.Hash) {
+		return errWorkspaceInvalidMeta
+	}
+	metaHash := firstNonEmptyString(ref.Meta.Hash, ref.Hash)
+	if metaHash != ref.Hash {
+		return errWorkspaceInvalidMeta
+	}
+	metaID := firstNonEmptyString(ref.Meta.ID, ref.ID)
+	if ref.ID != "" && metaID != ref.ID {
+		return errWorkspaceInvalidMeta
+	}
+	if metaID != "" && sha256Hex(metaID) != ref.Hash {
+		return errWorkspaceInvalidMeta
+	}
+	return nil
+}
+
 func (s *Server) createWorkspace() (workspaceRef, error) {
+	s.workspaceCreateMu.Lock()
+	defer s.workspaceCreateMu.Unlock()
+
 	if err := s.cleanupExpiredWorkspaces(); err != nil {
 		return workspaceRef{}, err
+	}
+	count, err := s.activeWorkspaceCount()
+	if err != nil {
+		return workspaceRef{}, err
+	}
+	if s.maxWorkspaces > 0 && count >= s.maxWorkspaces {
+		return workspaceRef{}, errWorkspaceLimitReached
 	}
 	id, err := randomWorkspaceID()
 	if err != nil {
@@ -113,13 +162,11 @@ func (s *Server) createWorkspace() (workspaceRef, error) {
 		LastAccessAt: now,
 	}
 	cfg := s.workspaceBaseConfig()
-	cfg.Service.OutputPath = ref.OutputPath
-	cfg.Service.StatePath = ref.StatePath
-	cfg.Service.CacheDir = ref.CacheDir
-	if err := os.MkdirAll(ref.Dir, 0o755); err != nil {
+	s.applyWorkspaceConfigPolicy(&cfg, ref)
+	if err := os.MkdirAll(ref.Dir, 0o700); err != nil {
 		return workspaceRef{}, fmt.Errorf("create workspace dir: %w", err)
 	}
-	if err := os.MkdirAll(ref.CacheDir, 0o755); err != nil {
+	if err := os.MkdirAll(ref.CacheDir, 0o700); err != nil {
 		return workspaceRef{}, fmt.Errorf("create workspace cache dir: %w", err)
 	}
 	if err := config.WriteJSON(ref.ConfigPath, cfg); err != nil {
@@ -128,10 +175,27 @@ func (s *Server) createWorkspace() (workspaceRef, error) {
 	if err := s.saveWorkspaceMeta(ref); err != nil {
 		return workspaceRef{}, err
 	}
-	if err := storage.AtomicWriteFile(ref.StatePath, []byte("{\n}\n"), 0o644); err != nil {
+	if err := storage.AtomicWriteFile(ref.StatePath, []byte("{\n}\n"), 0o600); err != nil {
 		return workspaceRef{}, fmt.Errorf("write workspace state: %w", err)
 	}
 	return ref, nil
+}
+
+func (s *Server) activeWorkspaceCount() (int, error) {
+	entries, err := os.ReadDir(s.workspaceRootDir())
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, fmt.Errorf("read workspace root: %w", err)
+	}
+	count := 0
+	for _, entry := range entries {
+		if entry.IsDir() {
+			count++
+		}
+	}
+	return count, nil
 }
 
 func (s *Server) workspaceBaseConfig() model.Config {
@@ -151,7 +215,51 @@ func (s *Server) workspaceBaseConfig() model.Config {
 	cfg.Service.WorkspaceCleanupInterval = base.Service.WorkspaceCleanupInterval
 	cfg.Service.PublishedDeleteIfNotAccessedDays = base.Service.PublishedDeleteIfNotAccessedDays
 	cfg.Service.PublicBaseURL = base.Service.PublicBaseURL
+	if base.Service.PublicConverter {
+		cfg.Service.AllowLAN = false
+		cfg.Service.PublicConverter = true
+	}
 	return cfg
+}
+
+func (s *Server) applyWorkspaceConfigPolicy(cfg *model.Config, ref workspaceRef) {
+	if cfg == nil {
+		return
+	}
+	cfg.Service.OutputPath = ref.OutputPath
+	cfg.Service.StatePath = ref.StatePath
+	cfg.Service.CacheDir = ref.CacheDir
+
+	base := s.snapshotConfig().Service
+	if !base.PublicConverter {
+		return
+	}
+	cfg.Service.Enabled = true
+	cfg.Service.ListenAddr = base.ListenAddr
+	cfg.Service.ListenPort = base.ListenPort
+	cfg.Service.LogLevel = base.LogLevel
+	cfg.Service.Template = base.Template
+	cfg.Service.RefreshInterval = max(base.RefreshInterval, publicMinRefreshInterval)
+	cfg.Service.RefreshOnRequest = base.RefreshOnRequest
+	cfg.Service.StaleIfError = base.StaleIfError
+	cfg.Service.StrictMode = base.StrictMode
+	cfg.Service.WorkspaceTTLSeconds = base.WorkspaceTTLSeconds
+	cfg.Service.WorkspaceCleanupIntervalSeconds = base.WorkspaceCleanupIntervalSeconds
+	cfg.Service.WorkspaceCleanupInterval = base.WorkspaceCleanupInterval
+	cfg.Service.PublishedDeleteIfNotAccessedDays = base.PublishedDeleteIfNotAccessedDays
+	cfg.Service.PublishedSubscriptionTTLSeconds = base.PublishedSubscriptionTTLSeconds
+	cfg.Service.PublicBaseURL = base.PublicBaseURL
+	cfg.Service.AccessToken = ""
+	cfg.Service.SubscriptionToken = ""
+	cfg.Service.PublicConverter = true
+	cfg.Service.TrustProxyHeaders = false
+	cfg.Service.AllowInsecurePublic = false
+	cfg.Service.MaxSubscriptionBytes = min(base.MaxSubscriptionBytes, publicMaxSubscriptionBytes)
+	cfg.Service.FetchTimeoutSeconds = min(base.FetchTimeoutSeconds, publicMaxFetchTimeout)
+	cfg.Service.AllowLAN = false
+	for i := range cfg.Subscriptions {
+		cfg.Subscriptions[i].AllowLAN = false
+	}
 }
 
 func (s *Server) loadWorkspace(id string) (workspaceRef, error) {
@@ -186,6 +294,9 @@ func (s *Server) loadWorkspaceNoTouch(id string) (workspaceRef, error) {
 	if strings.TrimSpace(ref.Meta.Hash) == "" {
 		ref.Meta.Hash = ref.Hash
 	}
+	if err := validateWorkspaceRefIdentity(ref); err != nil {
+		return workspaceRef{}, fmt.Errorf("decode workspace meta: %w", err)
+	}
 	if ref.Meta.LastAccessAt.IsZero() {
 		ref.Meta.LastAccessAt = legacyWorkspaceLastAccess(ref.Meta, s.snapshotConfig().Service.WorkspaceTTLSeconds)
 	}
@@ -197,6 +308,10 @@ func (s *Server) loadWorkspaceNoTouch(id string) (workspaceRef, error) {
 }
 
 func (s *Server) loadWorkspaceByHash(hash string) (workspaceRef, error) {
+	hash = strings.TrimSpace(hash)
+	if !validWorkspaceHash(hash) {
+		return workspaceRef{}, errWorkspaceNotFound
+	}
 	ref := s.buildWorkspaceRefByHash(hash)
 	data, err := os.ReadFile(ref.MetaPath)
 	if err != nil {
@@ -208,14 +323,12 @@ func (s *Server) loadWorkspaceByHash(hash string) (workspaceRef, error) {
 	if err := json.Unmarshal(data, &ref.Meta); err != nil {
 		return workspaceRef{}, fmt.Errorf("decode workspace meta: %w", err)
 	}
-	ref.ID = firstNonEmptyString(ref.Meta.ID, ref.ID)
-	ref.Hash = firstNonEmptyString(ref.Meta.Hash, hash)
-	ref.Dir = filepath.Join(s.workspaceRootDir(), ref.Hash)
-	ref.ConfigPath = filepath.Join(ref.Dir, "config.json")
-	ref.StatePath = filepath.Join(ref.Dir, "state.json")
-	ref.MetaPath = filepath.Join(ref.Dir, "meta.json")
-	ref.CacheDir = filepath.Join(s.cacheRootDir(), "workspaces", ref.Hash)
-	ref.OutputPath = filepath.Join(ref.CacheDir, "preview.yaml")
+	ref.Meta.ID = firstNonEmptyString(ref.Meta.ID, ref.ID)
+	ref.Meta.Hash = firstNonEmptyString(ref.Meta.Hash, ref.Hash)
+	if err := validateWorkspaceRefIdentity(ref); err != nil {
+		return workspaceRef{}, fmt.Errorf("decode workspace meta: %w", err)
+	}
+	ref.ID = ref.Meta.ID
 	if ref.Meta.LastAccessAt.IsZero() {
 		ref.Meta.LastAccessAt = legacyWorkspaceLastAccess(ref.Meta, s.snapshotConfig().Service.WorkspaceTTLSeconds)
 	}
@@ -226,12 +339,19 @@ func (s *Server) touchWorkspace(ref *workspaceRef) error {
 	if ref == nil {
 		return nil
 	}
-	ref.Meta.LastAccessAt = time.Now().UTC()
-	return s.saveWorkspaceMeta(*ref)
+	s.workspaceMetaMu.Lock()
+	defer s.workspaceMetaMu.Unlock()
+	current := ref.Meta
+	if data, err := os.ReadFile(ref.MetaPath); err == nil {
+		_ = json.Unmarshal(data, &current)
+	}
+	current.LastAccessAt = time.Now().UTC()
+	ref.Meta = current
+	return s.writeWorkspaceMetaUnlocked(*ref)
 }
 
 func (s *Server) workspaceExpiresAt(meta workspaceMeta) time.Time {
-	ttl := s.snapshotConfig().Service.WorkspaceTTLSeconds
+	ttl := s.effectiveWorkspaceTTLSeconds()
 	if ttl <= 0 {
 		return time.Time{}
 	}
@@ -240,6 +360,15 @@ func (s *Server) workspaceExpiresAt(meta workspaceMeta) time.Time {
 		lastAccessAt = legacyWorkspaceLastAccess(meta, ttl)
 	}
 	return lastAccessAt.UTC().Add(time.Duration(ttl) * time.Second)
+}
+
+func (s *Server) effectiveWorkspaceTTLSeconds() int {
+	cfg := s.snapshotConfig().Service
+	ttl := cfg.WorkspaceTTLSeconds
+	if cfg.PublicConverter && (ttl <= 0 || ttl > 6*60*60) {
+		return 6 * 60 * 60
+	}
+	return ttl
 }
 
 func (s *Server) workspaceExpired(meta workspaceMeta) bool {
@@ -267,8 +396,30 @@ func legacyWorkspaceLastAccess(meta workspaceMeta, ttlSeconds int) time.Time {
 }
 
 func (s *Server) saveWorkspaceMeta(ref workspaceRef) error {
+	if err := validateWorkspaceRefIdentity(ref); err != nil {
+		return err
+	}
+	canonical := s.buildWorkspaceRefByHash(ref.Hash)
+	ref.MetaPath = canonical.MetaPath
+	s.workspaceMetaMu.Lock()
+	defer s.workspaceMetaMu.Unlock()
+	if data, err := os.ReadFile(ref.MetaPath); err == nil {
+		var current workspaceMeta
+		if json.Unmarshal(data, &current) == nil && current.LastAccessAt.After(ref.Meta.LastAccessAt) {
+			ref.Meta.LastAccessAt = current.LastAccessAt
+		}
+	}
+	return s.writeWorkspaceMetaUnlocked(ref)
+}
+
+func (s *Server) writeWorkspaceMetaUnlocked(ref workspaceRef) error {
 	ref.Meta.ID = firstNonEmptyString(ref.Meta.ID, ref.ID)
 	ref.Meta.Hash = firstNonEmptyString(ref.Meta.Hash, ref.Hash)
+	if err := validateWorkspaceRefIdentity(ref); err != nil {
+		return err
+	}
+	canonical := s.buildWorkspaceRefByHash(ref.Hash)
+	ref.MetaPath = canonical.MetaPath
 	if ref.Meta.CreatedAt.IsZero() {
 		ref.Meta.CreatedAt = time.Now().UTC()
 	}
@@ -280,7 +431,7 @@ func (s *Server) saveWorkspaceMeta(ref workspaceRef) error {
 		return fmt.Errorf("marshal workspace meta: %w", err)
 	}
 	data = append(data, '\n')
-	if err := storage.AtomicWriteFile(ref.MetaPath, data, 0o644); err != nil {
+	if err := storage.AtomicWriteFile(ref.MetaPath, data, 0o600); err != nil {
 		return fmt.Errorf("write workspace meta: %w", err)
 	}
 	return nil
@@ -295,6 +446,16 @@ func (s *Server) deleteWorkspace(id string) error {
 }
 
 func (s *Server) removeWorkspace(ref workspaceRef) error {
+	if err := validateWorkspaceRefIdentity(ref); err != nil {
+		return err
+	}
+	canonical := s.buildWorkspaceRefByHash(ref.Hash)
+	ref.Dir = canonical.Dir
+	ref.ConfigPath = canonical.ConfigPath
+	ref.StatePath = canonical.StatePath
+	ref.OutputPath = canonical.OutputPath
+	ref.CacheDir = canonical.CacheDir
+	ref.MetaPath = canonical.MetaPath
 	var cleanupErrors []error
 	if err := os.Remove(ref.OutputPath); err != nil && !os.IsNotExist(err) {
 		cleanupErrors = append(cleanupErrors, fmt.Errorf("remove workspace output: %w", err))
@@ -333,12 +494,15 @@ func (s *Server) cleanupExpiredWorkspaces() error {
 		if !entry.IsDir() {
 			continue
 		}
+		unlock := s.lockWorkspaceHash(entry.Name())
 		ref, err := s.loadWorkspaceByHash(entry.Name())
 		if err != nil {
+			unlock()
 			cleanupErrors = append(cleanupErrors, fmt.Errorf("load workspace %s: %w", entry.Name(), err))
 			continue
 		}
 		if s.workspaceHasPublishedRefreshBinding(ref) {
+			unlock()
 			continue
 		}
 		if s.workspaceExpired(ref.Meta) {
@@ -346,6 +510,7 @@ func (s *Server) cleanupExpiredWorkspaces() error {
 				cleanupErrors = append(cleanupErrors, fmt.Errorf("remove expired workspace %s: %w", entry.Name(), err))
 			}
 		}
+		unlock()
 	}
 	return errors.Join(cleanupErrors...)
 }
@@ -388,8 +553,7 @@ func (s *Server) loadWorkspaceConfig(ref workspaceRef) (model.Config, error) {
 	if err != nil {
 		return model.Config{}, err
 	}
-	cfg.Service.StatePath = ref.StatePath
-	cfg.Service.CacheDir = ref.CacheDir
+	s.applyWorkspaceConfigPolicy(&cfg, ref)
 	if strings.TrimSpace(ref.Meta.PublishID) != "" {
 		if _, err := s.loadPublishedByID(ref.Meta.PublishID); err == nil {
 			cfg.Service.OutputPath = s.buildPublishedRef(ref.Meta.PublishID).CurrentPath

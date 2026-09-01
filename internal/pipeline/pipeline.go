@@ -20,6 +20,11 @@ import (
 
 var ErrNoNodes = errors.New("no nodes available for rendering")
 
+const (
+	PublicMaxFinalNodes    = 5000
+	PublicMaxRenderedBytes = 4 * 1024 * 1024
+)
+
 type CollectResult struct {
 	Nodes            []model.NodeIR
 	Warnings         []string
@@ -192,6 +197,18 @@ func RenderConfigWithProgress(cfg model.Config, onStage func(string)) (RenderRes
 	}
 	state.LastAudit = audit
 	finalSet.Nodes = finalNodes
+	if cfg.Service.PublicConverter && len(finalNodes) > PublicMaxFinalNodes {
+		return RenderResult{
+			Nodes:            finalNodes,
+			NodeCount:        len(finalNodes),
+			Warnings:         collected.Warnings,
+			Errors:           collected.Errors,
+			State:            state,
+			SubscriptionMeta: cloneSubscriptionMetaMap(collected.SubscriptionMeta),
+			AggregateMeta:    AggregateSubscriptionMetaForConfig(cfg, collected.SubscriptionMeta),
+			Audit:            audit,
+		}, fmt.Errorf("public converter node limit exceeded: %d > %d", len(finalNodes), PublicMaxFinalNodes)
+	}
 
 	if len(finalNodes) == 0 {
 		return RenderResult{
@@ -248,6 +265,18 @@ func RenderConfigWithProgress(cfg model.Config, onStage func(string)) (RenderRes
 			Audit:            audit,
 		}, err
 	}
+	if cfg.Service.PublicConverter && len(rendered) > PublicMaxRenderedBytes {
+		return RenderResult{
+			Nodes:            finalNodes,
+			NodeCount:        len(finalNodes),
+			Warnings:         collected.Warnings,
+			Errors:           collected.Errors,
+			State:            state,
+			SubscriptionMeta: cloneSubscriptionMetaMap(collected.SubscriptionMeta),
+			AggregateMeta:    AggregateSubscriptionMetaForConfig(cfg, collected.SubscriptionMeta),
+			Audit:            audit,
+		}, fmt.Errorf("public converter output size limit exceeded: %d > %d bytes", len(rendered), PublicMaxRenderedBytes)
+	}
 	if err := ValidateFinalConfig(rendered, finalSet, audit, renderOpts); err != nil {
 		audit.Warnings = append(audit.Warnings, model.AuditWarning{Code: "output_validation_failed", Message: err.Error()})
 		state.LastAudit = audit
@@ -281,7 +310,7 @@ func RenderConfigWithProgress(cfg model.Config, onStage func(string)) (RenderRes
 }
 
 func WriteRendered(path string, data []byte) error {
-	return storage.AtomicWriteFile(path, data, 0o644)
+	return storage.AtomicWriteFile(path, data, 0o600)
 }
 
 func appendTrailingNewline(data []byte) []byte {

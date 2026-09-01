@@ -74,6 +74,20 @@ type publishedRef struct {
 	Meta        publishedMeta
 }
 
+var (
+	errPublishedLimitReached = errors.New("published subscription limit reached")
+	errPublishedInvalidID    = errors.New("invalid published subscription ID")
+)
+
+const publishedAccessWriteInterval = 30 * time.Second
+
+type publishedAccessState struct {
+	pending       int
+	lastAccessAt  time.Time
+	lastPersisted time.Time
+	flushTimer    *time.Timer
+}
+
 func (s *Server) buildPublishedRef(id string) publishedRef {
 	id = strings.TrimSpace(id)
 	dir := filepath.Join(s.publishedRootDir(), id)
@@ -85,12 +99,69 @@ func (s *Server) buildPublishedRef(id string) publishedRef {
 	}
 }
 
+func validPublishID(id string) bool {
+	id = strings.TrimSpace(id)
+	if len(id) < 3 || len(id) > 128 || !strings.HasPrefix(id, "p_") {
+		return false
+	}
+	for _, char := range id {
+		switch {
+		case char >= 'a' && char <= 'z':
+		case char >= 'A' && char <= 'Z':
+		case char >= '0' && char <= '9':
+		case char == '_', char == '-':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 func (s *Server) createPublished(workspaceHash string) (publishedRef, error) {
+	s.publishedCreateMu.Lock()
+	defer s.publishedCreateMu.Unlock()
+
+	if s.snapshotConfig().Service.PublicConverter && s.maxPublications > 0 {
+		count, err := s.activePublicationCount()
+		if err != nil {
+			return publishedRef{}, err
+		}
+		if count >= s.maxPublications {
+			if err := s.cleanupStalePublished(); err != nil {
+				return publishedRef{}, err
+			}
+			count, err = s.activePublicationCount()
+			if err != nil {
+				return publishedRef{}, err
+			}
+			if count >= s.maxPublications {
+				return publishedRef{}, errPublishedLimitReached
+			}
+		}
+	}
+
 	token, err := randomSubscriptionToken()
 	if err != nil {
 		return publishedRef{}, err
 	}
 	return s.createPublishedWithToken(workspaceHash, "", token)
+}
+
+func (s *Server) activePublicationCount() (int, error) {
+	entries, err := os.ReadDir(s.publishedRootDir())
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, fmt.Errorf("read published root: %w", err)
+	}
+	count := 0
+	for _, entry := range entries {
+		if entry.IsDir() {
+			count++
+		}
+	}
+	return count, nil
 }
 
 func (s *Server) createPublishedWithToken(workspaceHash, publishID, token string) (publishedRef, error) {
@@ -100,6 +171,9 @@ func (s *Server) createPublishedWithToken(workspaceHash, publishID, token string
 		if err != nil {
 			return publishedRef{}, err
 		}
+	}
+	if !validPublishID(publishID) {
+		return publishedRef{}, errPublishedInvalidID
 	}
 	ref := s.buildPublishedRef(publishID)
 	now := time.Now().UTC()
@@ -112,7 +186,7 @@ func (s *Server) createPublishedWithToken(workspaceHash, publishID, token string
 		UpdatedAt:     now,
 		WorkspaceHash: strings.TrimSpace(workspaceHash),
 	}
-	if err := os.MkdirAll(ref.Dir, 0o755); err != nil {
+	if err := os.MkdirAll(ref.Dir, 0o700); err != nil {
 		return publishedRef{}, fmt.Errorf("create published dir: %w", err)
 	}
 	if err := s.savePublishedMeta(ref); err != nil {
@@ -122,6 +196,16 @@ func (s *Server) createPublishedWithToken(workspaceHash, publishID, token string
 }
 
 func (s *Server) loadPublishedByID(id string) (publishedRef, error) {
+	s.publishedMetaMu.Lock()
+	defer s.publishedMetaMu.Unlock()
+	return s.loadPublishedByIDUnlocked(id)
+}
+
+func (s *Server) loadPublishedByIDUnlocked(id string) (publishedRef, error) {
+	id = strings.TrimSpace(id)
+	if !validPublishID(id) {
+		return publishedRef{}, errWorkspaceNotFound
+	}
 	ref := s.buildPublishedRef(id)
 	data, err := os.ReadFile(ref.MetaPath)
 	if err != nil {
@@ -133,15 +217,49 @@ func (s *Server) loadPublishedByID(id string) (publishedRef, error) {
 	if err := json.Unmarshal(data, &ref.Meta); err != nil {
 		return publishedRef{}, fmt.Errorf("decode published meta: %w", err)
 	}
-	ref.ID = firstNonEmptyString(ref.Meta.PublishID, ref.ID)
-	ref.Dir = filepath.Join(s.publishedRootDir(), ref.ID)
-	ref.CurrentPath = filepath.Join(ref.Dir, "current.yaml")
-	ref.MetaPath = filepath.Join(ref.Dir, "meta.json")
+	ref.Meta.PublishID = firstNonEmptyString(ref.Meta.PublishID, ref.ID)
+	if !validPublishID(ref.Meta.PublishID) || ref.Meta.PublishID != ref.ID {
+		return publishedRef{}, fmt.Errorf("decode published meta: %w", errPublishedInvalidID)
+	}
 	return ref, nil
 }
 
 func (s *Server) savePublishedMeta(ref publishedRef) error {
 	ref.Meta.PublishID = firstNonEmptyString(ref.Meta.PublishID, ref.ID)
+	if !validPublishID(ref.ID) || ref.Meta.PublishID != ref.ID {
+		return errPublishedInvalidID
+	}
+	canonical := s.buildPublishedRef(ref.ID)
+	ref.Dir = canonical.Dir
+	ref.CurrentPath = canonical.CurrentPath
+	ref.MetaPath = canonical.MetaPath
+	s.publishedMetaMu.Lock()
+	oldTokenHash := ""
+	if current, err := s.loadPublishedByIDUnlocked(ref.ID); err == nil {
+		oldTokenHash = current.Meta.TokenHash
+	}
+	err := s.savePublishedMetaUnlocked(ref)
+	s.publishedMetaMu.Unlock()
+	if err != nil {
+		return err
+	}
+	newTokenHash := strings.TrimSpace(ref.Meta.TokenHash)
+	if token := strings.TrimSpace(ref.Meta.Token); token != "" {
+		newTokenHash = sha256Hex(token)
+	}
+	s.replacePublishedTokenIndex(oldTokenHash, newTokenHash, firstNonEmptyString(ref.Meta.PublishID, ref.ID))
+	return nil
+}
+
+func (s *Server) savePublishedMetaUnlocked(ref publishedRef) error {
+	ref.Meta.PublishID = firstNonEmptyString(ref.Meta.PublishID, ref.ID)
+	if !validPublishID(ref.ID) || ref.Meta.PublishID != ref.ID {
+		return errPublishedInvalidID
+	}
+	canonical := s.buildPublishedRef(ref.ID)
+	ref.Dir = canonical.Dir
+	ref.CurrentPath = canonical.CurrentPath
+	ref.MetaPath = canonical.MetaPath
 	ref.Meta.Token = strings.TrimSpace(ref.Meta.Token)
 	if ref.Meta.Token != "" {
 		ref.Meta.TokenHash = sha256Hex(ref.Meta.Token)
@@ -158,9 +276,95 @@ func (s *Server) savePublishedMeta(ref publishedRef) error {
 		return fmt.Errorf("marshal published meta: %w", err)
 	}
 	data = append(data, '\n')
-	if err := storage.AtomicWriteFile(ref.MetaPath, data, 0o644); err != nil {
+	if err := storage.AtomicWriteFile(ref.MetaPath, data, 0o600); err != nil {
 		return fmt.Errorf("write published meta: %w", err)
 	}
+	return nil
+}
+
+func (s *Server) updatePublishedMeta(id string, update func(*publishedRef) error) (publishedRef, error) {
+	s.publishedMetaMu.Lock()
+	published, err := s.loadPublishedByIDUnlocked(id)
+	if err != nil {
+		s.publishedMetaMu.Unlock()
+		return publishedRef{}, err
+	}
+	oldTokenHash := published.Meta.TokenHash
+	if update != nil {
+		if err := update(&published); err != nil {
+			s.publishedMetaMu.Unlock()
+			return publishedRef{}, err
+		}
+	}
+	if err := s.savePublishedMetaUnlocked(published); err != nil {
+		s.publishedMetaMu.Unlock()
+		return publishedRef{}, err
+	}
+	s.publishedMetaMu.Unlock()
+	s.replacePublishedTokenIndex(oldTokenHash, published.Meta.TokenHash, published.ID)
+	return published, nil
+}
+
+func (s *Server) replacePublishedTokenIndex(oldTokenHash, newTokenHash, publishID string) {
+	oldTokenHash = strings.TrimSpace(oldTokenHash)
+	newTokenHash = strings.TrimSpace(newTokenHash)
+	publishID = strings.TrimSpace(publishID)
+	s.publishedIndexMu.Lock()
+	defer s.publishedIndexMu.Unlock()
+	if oldTokenHash != "" && oldTokenHash != newTokenHash && s.publishedTokenIndex[oldTokenHash] == publishID {
+		delete(s.publishedTokenIndex, oldTokenHash)
+	}
+	if newTokenHash != "" && publishID != "" {
+		s.publishedTokenIndex[newTokenHash] = publishID
+	}
+}
+
+func (s *Server) removePublishedTokenIndex(tokenHash, publishID string) {
+	s.publishedIndexMu.Lock()
+	defer s.publishedIndexMu.Unlock()
+	if s.publishedTokenIndex[strings.TrimSpace(tokenHash)] == strings.TrimSpace(publishID) {
+		delete(s.publishedTokenIndex, strings.TrimSpace(tokenHash))
+	}
+}
+
+func (s *Server) indexedPublishID(tokenHash string) string {
+	s.publishedIndexMu.RLock()
+	defer s.publishedIndexMu.RUnlock()
+	return s.publishedTokenIndex[strings.TrimSpace(tokenHash)]
+}
+
+func (s *Server) ensurePublishedTokenIndex() error {
+	s.publishedIndexMu.RLock()
+	loaded := s.publishedIndexLoaded
+	s.publishedIndexMu.RUnlock()
+	if loaded {
+		return nil
+	}
+
+	entries, err := os.ReadDir(s.publishedRootDir())
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	discovered := make(map[string]string)
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		published, err := s.loadPublishedByID(entry.Name())
+		if err != nil || published.Meta.Revoked || strings.TrimSpace(published.Meta.TokenHash) == "" {
+			continue
+		}
+		discovered[published.Meta.TokenHash] = published.ID
+	}
+
+	s.publishedIndexMu.Lock()
+	for tokenHash, publishID := range discovered {
+		if _, exists := s.publishedTokenIndex[tokenHash]; !exists {
+			s.publishedTokenIndex[tokenHash] = publishID
+		}
+	}
+	s.publishedIndexLoaded = true
+	s.publishedIndexMu.Unlock()
 	return nil
 }
 
@@ -237,24 +441,19 @@ func (s *Server) migrateLegacyPublishedToken(token, workspaceHash string) (publi
 	if err != nil {
 		return publishedRef{}, err
 	}
-	published.Meta.CreatedAt = firstNonZeroTime(legacy.CreatedAt, published.Meta.CreatedAt)
-	published.Meta.UpdatedAt = firstNonZeroTime(legacy.UpdatedAt, published.Meta.UpdatedAt)
-	if err := storage.AtomicWriteFile(published.CurrentPath, yamlBytes, 0o644); err != nil {
+	if err := storage.AtomicWriteFile(published.CurrentPath, yamlBytes, 0o600); err != nil {
 		return publishedRef{}, fmt.Errorf("write migrated published yaml: %w", err)
 	}
-	if err := s.savePublishedMeta(published); err != nil {
+	published, err = s.updatePublishedMeta(published.ID, func(current *publishedRef) error {
+		current.Meta.CreatedAt = firstNonZeroTime(legacy.CreatedAt, current.Meta.CreatedAt)
+		current.Meta.UpdatedAt = firstNonZeroTime(legacy.UpdatedAt, current.Meta.UpdatedAt)
+		return nil
+	})
+	if err != nil {
 		return publishedRef{}, err
 	}
 	_ = os.Remove(metaPath)
 	_ = os.Remove(yamlPath)
-	if strings.TrimSpace(workspaceHash) != "" {
-		if ref, err := s.loadWorkspaceByHash(workspaceHash); err == nil {
-			ref.Meta.PublishID = published.ID
-			ref.Meta.LegacyPublishedToken = ""
-			ref.Meta.LegacyPublishedAt = time.Time{}
-			_ = s.saveWorkspaceMeta(ref)
-		}
-	}
 	return published, nil
 }
 
@@ -274,13 +473,24 @@ func (s *Server) finalizePublishedRefresh(ref *workspaceRef, published *publishe
 		return nil
 	}
 	now := time.Now().UTC()
-	published.Meta.WorkspaceHash = firstNonEmptyString(ref.Hash, published.Meta.WorkspaceHash)
-	published.Meta.UpdatedAt = now
-	published.Meta.OutputFilename = publishedOutputFilenameFromConfig(cfg)
-	published.Meta.SubscriptionInfo, published.Meta.SourceUserinfo = buildPublishedSubscriptionUserinfo(cfg, result.SubscriptionMeta, now)
-	if err := s.savePublishedMeta(*published); err != nil {
+	info, sources := buildPublishedSubscriptionUserinfo(cfg, result.SubscriptionMeta, now)
+	updated, err := s.updatePublishedMeta(published.ID, func(current *publishedRef) error {
+		if ref != nil {
+			current.Meta.WorkspaceHash = firstNonEmptyString(ref.Hash, current.Meta.WorkspaceHash)
+		}
+		current.Meta.UpdatedAt = now
+		current.Meta.OutputFilename = publishedOutputFilenameFromConfig(cfg)
+		current.Meta.SubscriptionInfo = info
+		current.Meta.SourceUserinfo = sources
+		return nil
+	})
+	if err != nil {
+		if errors.Is(err, errWorkspaceNotFound) {
+			_ = os.RemoveAll(published.Dir)
+		}
 		return err
 	}
+	*published = updated
 	if ref != nil {
 		ref.Meta.PublishID = published.ID
 		ref.Meta.LegacyPublishedToken = ""
@@ -388,27 +598,119 @@ func subscriptionURLHost(rawURL string) string {
 	return strings.TrimSpace(parsed.Hostname())
 }
 
-func (s *Server) loadPublishedYAML(token string) ([]byte, publishedRef, error) {
+func (s *Server) loadPublishedYAML(token string) ([]byte, publishedRef, bool, error) {
 	published, err := s.loadPublishedByToken(token)
 	if err != nil {
-		return nil, publishedRef{}, err
+		return nil, publishedRef{}, false, err
 	}
 	if published.Meta.Revoked {
-		return nil, publishedRef{}, errWorkspaceNotFound
+		return nil, publishedRef{}, false, errWorkspaceNotFound
 	}
 	published = s.refreshPublishedOnRequest(published)
 	published = s.ensurePublishedSubscriptionUserinfo(published)
 	data, err := os.ReadFile(published.CurrentPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, publishedRef{}, errWorkspaceNotFound
+			return nil, publishedRef{}, false, errWorkspaceNotFound
 		}
-		return nil, publishedRef{}, err
+		return nil, publishedRef{}, false, err
 	}
-	published.Meta.LastAccessAt = time.Now().UTC()
-	published.Meta.AccessCount++
-	_ = s.savePublishedMeta(published)
-	return data, published, nil
+	published, shouldLog := s.recordPublishedAccess(published)
+	return data, published, shouldLog, nil
+}
+
+func (s *Server) recordPublishedAccess(published publishedRef) (publishedRef, bool) {
+	now := time.Now().UTC()
+	s.publishedAccessMu.Lock()
+	state := s.publishedAccess[published.ID]
+	if state == nil {
+		state = &publishedAccessState{}
+		s.publishedAccess[published.ID] = state
+	}
+	state.pending++
+	state.lastAccessAt = now
+	shouldPersist := state.lastPersisted.IsZero() || now.Sub(state.lastPersisted) >= publishedAccessWriteInterval
+	count := 0
+	if shouldPersist {
+		count = state.pending
+		state.pending = 0
+		state.lastPersisted = now
+		if state.flushTimer != nil {
+			state.flushTimer.Stop()
+			state.flushTimer = nil
+		}
+	} else if state.flushTimer == nil {
+		delay := publishedAccessWriteInterval - now.Sub(state.lastPersisted)
+		state.flushTimer = time.AfterFunc(delay, func() { s.flushPublishedAccess(published.ID) })
+	}
+	s.publishedAccessMu.Unlock()
+
+	if !shouldPersist {
+		return published, false
+	}
+	updated, err := s.persistPublishedAccess(published.ID, count, now)
+	if err != nil {
+		s.requeuePublishedAccess(published.ID, count, now)
+		return published, false
+	}
+	return updated, true
+}
+
+func (s *Server) flushPublishedAccess(publishID string) {
+	s.publishedAccessMu.Lock()
+	state := s.publishedAccess[publishID]
+	if state == nil {
+		s.publishedAccessMu.Unlock()
+		return
+	}
+	count := state.pending
+	lastAccessAt := state.lastAccessAt
+	state.pending = 0
+	state.lastPersisted = time.Now().UTC()
+	state.flushTimer = nil
+	s.publishedAccessMu.Unlock()
+	if count == 0 {
+		return
+	}
+	if _, err := s.persistPublishedAccess(publishID, count, lastAccessAt); err != nil {
+		s.requeuePublishedAccess(publishID, count, lastAccessAt)
+	}
+}
+
+func (s *Server) persistPublishedAccess(publishID string, count int, lastAccessAt time.Time) (publishedRef, error) {
+	return s.updatePublishedMeta(publishID, func(current *publishedRef) error {
+		if lastAccessAt.After(current.Meta.LastAccessAt) {
+			current.Meta.LastAccessAt = lastAccessAt
+		}
+		current.Meta.AccessCount += count
+		return nil
+	})
+}
+
+func (s *Server) requeuePublishedAccess(publishID string, count int, lastAccessAt time.Time) {
+	s.publishedAccessMu.Lock()
+	defer s.publishedAccessMu.Unlock()
+	state := s.publishedAccess[publishID]
+	if state == nil {
+		state = &publishedAccessState{}
+		s.publishedAccess[publishID] = state
+	}
+	state.pending += count
+	if lastAccessAt.After(state.lastAccessAt) {
+		state.lastAccessAt = lastAccessAt
+	}
+	if state.flushTimer == nil {
+		state.flushTimer = time.AfterFunc(publishedAccessWriteInterval, func() { s.flushPublishedAccess(publishID) })
+	}
+}
+
+func (s *Server) forgetPublishedAccess(publishID string) {
+	s.publishedAccessMu.Lock()
+	defer s.publishedAccessMu.Unlock()
+	if state := s.publishedAccess[publishID]; state != nil && state.flushTimer != nil {
+		state.flushTimer.Stop()
+	}
+	delete(s.publishedAccess, publishID)
 }
 
 func (s *Server) refreshPublishedOnRequest(published publishedRef) publishedRef {
@@ -421,7 +723,7 @@ func (s *Server) refreshPublishedOnRequest(published publishedRef) publishedRef 
 	}
 	_, refreshed, err := s.refreshPublishedWorkspace(ref, "published subscription refresh")
 	if err != nil {
-		if errors.Is(err, ErrRefreshInProgress) {
+		if errors.Is(err, ErrRefreshInProgress) || errors.Is(err, ErrRefreshCapacity) {
 			s.appendLog("published subscription refresh skipped: publish=" + published.ID + " refresh already running")
 			s.appendWorkspaceLog(ref.Hash, "published subscription refresh skipped: refresh already running")
 			return published
@@ -448,20 +750,31 @@ func (s *Server) ensurePublishedSubscriptionUserinfo(published publishedRef) pub
 		return published
 	}
 
-	published.Meta.WorkspaceHash = firstNonEmptyString(published.Meta.WorkspaceHash, ref.Hash)
-	published.Meta.SubscriptionInfo = info
-	published.Meta.SourceUserinfo = sources
-	if err := s.savePublishedMeta(published); err != nil {
+	updated, err := s.updatePublishedMeta(published.ID, func(current *publishedRef) error {
+		if current.Meta.SubscriptionInfo != nil && current.Meta.SubscriptionInfo.Total > 0 {
+			return nil
+		}
+		current.Meta.WorkspaceHash = firstNonEmptyString(current.Meta.WorkspaceHash, ref.Hash)
+		current.Meta.SubscriptionInfo = info
+		current.Meta.SourceUserinfo = sources
+		return nil
+	})
+	if err != nil {
 		s.appendLog("published subscription userinfo restore failed: publish=" + published.ID + " error=" + err.Error())
 		return published
 	}
+	published = updated
 	s.appendLog(fmt.Sprintf("published subscription userinfo restored: publish=%s token_hint=%s sources=%d", published.ID, published.Meta.TokenHint, info.Sources))
 	return published
 }
 
 func (s *Server) loadPublishedWorkspaceState(published publishedRef) (workspaceRef, model.Config, model.NodeState, bool) {
+	return s.loadPublishedWorkspaceStateWithLock(published, "")
+}
+
+func (s *Server) loadPublishedWorkspaceStateWithLock(published publishedRef, lockedWorkspaceHash string) (workspaceRef, model.Config, model.NodeState, bool) {
 	if hash := strings.TrimSpace(published.Meta.WorkspaceHash); hash != "" {
-		if ref, cfg, state, ok := s.loadWorkspaceStateByHash(hash); ok {
+		if ref, cfg, state, ok := s.loadWorkspaceStateByHashWithLock(hash, lockedWorkspaceHash); ok {
 			return ref, cfg, state, true
 		}
 	}
@@ -479,7 +792,7 @@ func (s *Server) loadPublishedWorkspaceState(published publishedRef) (workspaceR
 		if !entry.IsDir() {
 			continue
 		}
-		ref, cfg, state, ok := s.loadWorkspaceStateByHash(entry.Name())
+		ref, cfg, state, ok := s.loadWorkspaceStateByHashWithLock(entry.Name(), lockedWorkspaceHash)
 		if !ok || ref.Meta.PublishID != published.ID {
 			continue
 		}
@@ -500,6 +813,19 @@ func (s *Server) loadPublishedWorkspaceState(published publishedRef) (workspaceR
 }
 
 func (s *Server) loadWorkspaceStateByHash(hash string) (workspaceRef, model.Config, model.NodeState, bool) {
+	return s.loadWorkspaceStateByHashWithLock(hash, "")
+}
+
+func (s *Server) loadWorkspaceStateByHashWithLock(hash, lockedWorkspaceHash string) (workspaceRef, model.Config, model.NodeState, bool) {
+	unlock := func() {}
+	if strings.TrimSpace(hash) != strings.TrimSpace(lockedWorkspaceHash) {
+		unlock = s.lockWorkspaceHash(hash)
+	}
+	defer unlock()
+	return s.loadWorkspaceStateByHashUnlocked(hash)
+}
+
+func (s *Server) loadWorkspaceStateByHashUnlocked(hash string) (workspaceRef, model.Config, model.NodeState, bool) {
 	ref, err := s.loadWorkspaceByHash(hash)
 	if err != nil {
 		return workspaceRef{}, model.Config{}, model.NodeState{}, false
@@ -521,25 +847,22 @@ func (s *Server) loadPublishedByToken(token string) (publishedRef, error) {
 		return publishedRef{}, errWorkspaceNotFound
 	}
 	tokenHash := sha256Hex(token)
-	root := s.publishedRootDir()
-	entries, err := os.ReadDir(root)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return publishedRef{}, errWorkspaceNotFound
-		}
-		return publishedRef{}, err
-	}
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		published, err := s.loadPublishedByID(entry.Name())
-		if err != nil {
-			continue
-		}
-		if published.Meta.TokenHash == tokenHash && !published.Meta.Revoked {
+	if publishID := s.indexedPublishID(tokenHash); publishID != "" {
+		published, err := s.loadPublishedByID(publishID)
+		if err == nil && published.Meta.TokenHash == tokenHash && !published.Meta.Revoked {
 			return published, nil
 		}
+		s.removePublishedTokenIndex(tokenHash, publishID)
+	}
+	if err := s.ensurePublishedTokenIndex(); err != nil {
+		return publishedRef{}, err
+	}
+	if publishID := s.indexedPublishID(tokenHash); publishID != "" {
+		published, err := s.loadPublishedByID(publishID)
+		if err == nil && published.Meta.TokenHash == tokenHash && !published.Meta.Revoked {
+			return published, nil
+		}
+		s.removePublishedTokenIndex(tokenHash, publishID)
 	}
 	if published, err := s.migrateLegacyPublishedToken(token, ""); err == nil {
 		return published, nil
@@ -548,39 +871,60 @@ func (s *Server) loadPublishedByToken(token string) (publishedRef, error) {
 }
 
 func (s *Server) rotatePublishedToken(publishID string) (publishedRef, error) {
-	published, err := s.loadPublishedByID(publishID)
-	if err != nil {
-		return publishedRef{}, err
-	}
 	token, err := randomSubscriptionToken()
 	if err != nil {
 		return publishedRef{}, err
 	}
 	now := time.Now().UTC()
-	published.Meta.Token = token
-	published.Meta.TokenHash = sha256Hex(token)
-	published.Meta.TokenHint = publishedTokenHint(token)
-	published.Meta.UpdatedAt = now
-	published.Meta.RotatedAt = now
-	published.Meta.Revoked = false
-	if err := s.savePublishedMeta(published); err != nil {
-		return publishedRef{}, err
-	}
-	return published, nil
+	return s.updatePublishedMeta(publishID, func(published *publishedRef) error {
+		published.Meta.Token = token
+		published.Meta.TokenHash = sha256Hex(token)
+		published.Meta.TokenHint = publishedTokenHint(token)
+		published.Meta.UpdatedAt = now
+		published.Meta.RotatedAt = now
+		published.Meta.Revoked = false
+		return nil
+	})
 }
 
 func (s *Server) deletePublished(publishID string) error {
-	published, err := s.loadPublishedByID(publishID)
-	if err != nil {
-		return err
-	}
-	if err := os.RemoveAll(published.Dir); err != nil {
-		return err
-	}
-	return s.clearPublishedAssociations(publishID)
+	return s.deletePublishedForWorkspace(publishID, "")
 }
 
-func (s *Server) clearPublishedAssociations(publishID string) error {
+func (s *Server) deletePublishedForWorkspace(publishID, lockedWorkspaceHash string) error {
+	_, err := s.removePublishedIfWithWorkspace(publishID, lockedWorkspaceHash, func(publishedRef) bool { return true })
+	return err
+}
+
+func (s *Server) removePublishedIf(publishID string, shouldRemove func(publishedRef) bool) (bool, error) {
+	return s.removePublishedIfWithWorkspace(publishID, "", shouldRemove)
+}
+
+func (s *Server) removePublishedIfWithWorkspace(publishID, lockedWorkspaceHash string, shouldRemove func(publishedRef) bool) (bool, error) {
+	s.publishedMetaMu.Lock()
+	published, err := s.loadPublishedByIDUnlocked(publishID)
+	if err != nil {
+		s.publishedMetaMu.Unlock()
+		return false, err
+	}
+	if shouldRemove != nil && !shouldRemove(published) {
+		s.publishedMetaMu.Unlock()
+		return false, nil
+	}
+	err = os.RemoveAll(published.Dir)
+	s.publishedMetaMu.Unlock()
+	if err != nil {
+		return false, err
+	}
+	s.removePublishedTokenIndex(published.Meta.TokenHash, published.ID)
+	s.forgetPublishedAccess(published.ID)
+	if err := s.clearPublishedAssociations(publishID, lockedWorkspaceHash); err != nil {
+		return true, err
+	}
+	return true, nil
+}
+
+func (s *Server) clearPublishedAssociations(publishID, lockedWorkspaceHash string) error {
 	root := s.workspaceRootDir()
 	entries, err := os.ReadDir(root)
 	if err != nil {
@@ -594,11 +938,17 @@ func (s *Server) clearPublishedAssociations(publishID string) error {
 		if !entry.IsDir() {
 			continue
 		}
+		unlock := func() {}
+		if entry.Name() != strings.TrimSpace(lockedWorkspaceHash) {
+			unlock = s.lockWorkspaceHash(entry.Name())
+		}
 		ref, err := s.loadWorkspaceByHash(entry.Name())
 		if err != nil {
+			unlock()
 			continue
 		}
 		if ref.Meta.PublishID != publishID {
+			unlock()
 			continue
 		}
 		ref.Meta.PublishID = ""
@@ -607,12 +957,17 @@ func (s *Server) clearPublishedAssociations(publishID string) error {
 		if err := s.saveWorkspaceMeta(ref); err != nil {
 			updateErrors = append(updateErrors, fmt.Errorf("clear publish association from workspace %s: %w", entry.Name(), err))
 		}
+		unlock()
 	}
 	return errors.Join(updateErrors...)
 }
 
 func (s *Server) cleanupStalePublished() error {
-	days := s.snapshotConfig().Service.PublishedDeleteIfNotAccessedDays
+	service := s.snapshotConfig().Service
+	days := service.PublishedDeleteIfNotAccessedDays
+	if service.PublicConverter && days <= 0 {
+		days = 30
+	}
 	if days <= 0 {
 		return nil
 	}
@@ -630,21 +985,12 @@ func (s *Server) cleanupStalePublished() error {
 		if !entry.IsDir() {
 			continue
 		}
-		published, err := s.loadPublishedByID(entry.Name())
+		_, err := s.removePublishedIf(entry.Name(), func(published publishedRef) bool {
+			lastAccess := firstNonZeroTime(published.Meta.LastAccessAt, published.Meta.UpdatedAt, published.Meta.CreatedAt)
+			return !lastAccess.IsZero() && !lastAccess.After(cutoff)
+		})
 		if err != nil {
-			cleanupErrors = append(cleanupErrors, fmt.Errorf("load published item %s: %w", entry.Name(), err))
-			continue
-		}
-		lastAccess := firstNonZeroTime(published.Meta.LastAccessAt, published.Meta.UpdatedAt, published.Meta.CreatedAt)
-		if lastAccess.IsZero() || lastAccess.After(cutoff) {
-			continue
-		}
-		if err := os.RemoveAll(published.Dir); err != nil {
-			cleanupErrors = append(cleanupErrors, fmt.Errorf("remove stale published item %s: %w", published.ID, err))
-			continue
-		}
-		if err := s.clearPublishedAssociations(published.ID); err != nil {
-			cleanupErrors = append(cleanupErrors, err)
+			cleanupErrors = append(cleanupErrors, fmt.Errorf("remove stale published item %s: %w", entry.Name(), err))
 		}
 	}
 	return errors.Join(cleanupErrors...)

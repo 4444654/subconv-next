@@ -15,6 +15,31 @@ func readAppJS(t *testing.T) string {
 	return string(data)
 }
 
+func readLoginJS(t *testing.T) string {
+	t.Helper()
+	data, err := os.ReadFile("login.js")
+	if err != nil {
+		t.Fatalf("ReadFile(login.js) error = %v", err)
+	}
+	return string(data)
+}
+
+func TestLoginRedirectRequiresParsedSameOriginURL(t *testing.T) {
+	login := readLoginJS(t)
+	for _, needle := range []string{
+		"new URL(candidate, window.location.origin)",
+		"target.origin !== window.location.origin",
+		"target.pathname.startsWith(\"/login\")",
+	} {
+		if !strings.Contains(login, needle) {
+			t.Fatalf("login.js missing same-origin redirect guard %q", needle)
+		}
+	}
+	if strings.Contains(login, "candidate.startsWith(\"/\")") {
+		t.Fatal("login.js still relies on a string-prefix redirect check")
+	}
+}
+
 func TestLocalDraftDoesNotPersistFullSubscriptionTokenOrURL(t *testing.T) {
 	app := readAppJS(t)
 
@@ -101,6 +126,20 @@ func TestRestoreFromPublishedDoesNotUseBrowserConfirm(t *testing.T) {
 	}
 }
 
+func TestPublicConverterHidesPublishedLinkRecovery(t *testing.T) {
+	app := readAppJS(t)
+
+	for _, needle := range []string{
+		"const restorePublishedButton = state.publicConverter",
+		"if (state.publicConverter) {\n    showToast(\"公网模式不支持从发布链接恢复源配置。\", true);",
+		"state.publicConverter ? \"可将当前配置另存为本机草稿。\"",
+	} {
+		if !strings.Contains(app, needle) {
+			t.Fatalf("app.js missing public restore guard %q", needle)
+		}
+	}
+}
+
 func TestMultipleLocalDraftStorageHooksExist(t *testing.T) {
 	app := readAppJS(t)
 
@@ -137,6 +176,75 @@ func TestSubscriptionLANAllowHooksExist(t *testing.T) {
 	for _, needle := range required {
 		if !strings.Contains(app, needle) {
 			t.Fatalf("app.js missing LAN subscription hook %q", needle)
+		}
+	}
+}
+
+func TestSubscriptionURLTypingKeepsInputMounted(t *testing.T) {
+	app := readAppJS(t)
+	for _, needle := range []string{
+		"function renderSourceRowMeta",
+		"function updateSubscriptionRowMeta",
+		"updateSubscriptionRowMeta(index);",
+		"data-source-meta-index=",
+	} {
+		if !strings.Contains(app, needle) {
+			t.Fatalf("app.js missing stable subscription URL input hook %q", needle)
+		}
+	}
+}
+
+func TestGenerationErrorStateIsActionable(t *testing.T) {
+	app := readAppJS(t)
+	index, err := os.ReadFile("index.html")
+	if err != nil {
+		t.Fatalf("ReadFile(index.html) error = %v", err)
+	}
+
+	for _, needle := range []string{
+		"function describeGenerationError",
+		"订阅地址无法访问",
+		"订阅域名无法解析",
+		"function focusSubscriptionSources",
+		"function focusGenerationError",
+		"viewButton.disabled = !hasResult",
+	} {
+		if !strings.Contains(app, needle) {
+			t.Fatalf("app.js missing actionable error-state hook %q", needle)
+		}
+	}
+
+	indexText := string(index)
+	for _, id := range []string{
+		"result-error-card",
+		"result-error-title",
+		"result-error-description",
+		"review-error-source-btn",
+		"open-error-diagnostics-btn",
+	} {
+		if !strings.Contains(indexText, `id="`+id+`"`) {
+			t.Fatalf("index.html missing error-state element %q", id)
+		}
+	}
+}
+
+func TestGenerationFlowHandlesDuplicateAndTransientRequests(t *testing.T) {
+	app := readAppJS(t)
+
+	for _, needle := range []string{
+		`if (state.generationInFlight)`,
+		`state.generationInFlight = true`,
+		`state.generationInFlight = false`,
+		`summaryRefreshButton.disabled = state.generationInFlight`,
+		`response?._networkError`,
+		`response?.error?.code === "REFRESH_IN_PROGRESS"`,
+		`async function recoverRunningRefresh`,
+		`_httpStatus: response.status`,
+		`_networkError: true`,
+		`请求过于频繁`,
+	} {
+		if !strings.Contains(app, needle) {
+			t.Fatalf("app.js missing resilient generation hook %q", needle)
 		}
 	}
 }

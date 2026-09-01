@@ -31,13 +31,16 @@ func (fn roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 
 func TestSiteLogoTargetRejectsPrivateAndCredentialedURLs(t *testing.T) {
 	private := siteLogoResolverStub{ips: []net.IPAddr{{IP: net.ParseIP("127.0.0.1")}}}
-	public := siteLogoResolverStub{ips: []net.IPAddr{{IP: net.ParseIP("203.0.113.10")}}}
+	public := siteLogoResolverStub{ips: []net.IPAddr{{IP: net.ParseIP("8.8.8.8")}}}
 
 	if err := validateSiteLogoTarget(context.Background(), private, mustParseURL(t, "https://example.com/icon.png")); err == nil {
 		t.Fatal("validateSiteLogoTarget() accepted a private redirect target")
 	}
 	if err := validateSiteLogoTarget(context.Background(), public, mustParseURL(t, "https://user:pass@example.com/icon.png")); err == nil {
 		t.Fatal("validateSiteLogoTarget() accepted URL credentials")
+	}
+	if err := validateSiteLogoTarget(context.Background(), public, mustParseURL(t, "https://example.com:22/icon.png")); err == nil {
+		t.Fatal("validateSiteLogoTarget() accepted a non-Web redirect port")
 	}
 	if err := validateSiteLogoTarget(context.Background(), public, mustParseURL(t, "https://example.com/icon.png")); err != nil {
 		t.Fatalf("validateSiteLogoTarget() rejected public target: %v", err)
@@ -51,13 +54,22 @@ func TestParseSiteLogoURLRejectsCredentials(t *testing.T) {
 }
 
 func TestResolveSiteLogoDialTargetUsesValidatedIP(t *testing.T) {
-	resolver := siteLogoResolverStub{ips: []net.IPAddr{{IP: net.ParseIP("203.0.113.10")}}}
+	resolver := siteLogoResolverStub{ips: []net.IPAddr{{IP: net.ParseIP("8.8.8.8")}}}
 	got, err := resolveSiteLogoDialTarget(context.Background(), resolver, "example.com:443")
 	if err != nil {
 		t.Fatalf("resolveSiteLogoDialTarget() error = %v", err)
 	}
-	if got != "203.0.113.10:443" {
+	if got != "8.8.8.8:443" {
 		t.Fatalf("dial target = %q, want public resolved address", got)
+	}
+}
+
+func TestSiteLogoRejectsReservedPublicLookingNetworks(t *testing.T) {
+	for _, rawIP := range []string{"100.64.0.1", "192.0.2.1", "198.18.0.1", "203.0.113.1", "64:ff9b::a00:1", "2002:0a00:0001::"} {
+		resolver := siteLogoResolverStub{ips: []net.IPAddr{{IP: net.ParseIP(rawIP)}}}
+		if siteLogoHostAllowedWithResolver(context.Background(), resolver, "example.com") {
+			t.Fatalf("siteLogoHostAllowedWithResolver() accepted reserved address %s", rawIP)
+		}
 	}
 }
 
@@ -82,6 +94,49 @@ func TestFetchLogoRejectsNonImageAndOversizedBodies(t *testing.T) {
 	dataURL, ok := fetchLogoAsDataURL(response("image/png", []byte("png")), target)
 	if !ok || !strings.HasPrefix(dataURL, "data:image/png;base64,") {
 		t.Fatalf("fetchLogoAsDataURL() = %q, %v", dataURL, ok)
+	}
+}
+
+func TestFetchLogoRejectsNonWebPortBeforeRequest(t *testing.T) {
+	called := false
+	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		called = true
+		return nil, nil
+	})}
+	if _, ok := fetchLogoAsDataURL(client, mustParseURL(t, "https://example.com:22/icon.png")); ok {
+		t.Fatal("fetchLogoAsDataURL() accepted a non-Web port")
+	}
+	if called {
+		t.Fatal("fetchLogoAsDataURL() sent a request to a rejected port")
+	}
+}
+
+func TestDiscoverSiteLogoCandidatesIsBounded(t *testing.T) {
+	var html strings.Builder
+	for index := 0; index < maxSiteLogoCandidates+20; index++ {
+		html.WriteString(`<link rel="icon" href="/icon-`)
+		html.WriteString(string(rune('a' + index)))
+		html.WriteString(`.png">`)
+	}
+	candidates := discoverSiteLogoCandidates(mustParseURL(t, "https://example.com/"), []byte(html.String()))
+	if len(candidates) != maxSiteLogoCandidates {
+		t.Fatalf("candidate count = %d, want %d", len(candidates), maxSiteLogoCandidates)
+	}
+}
+
+func TestFetchLogoStopsBeforeRequestWhenContextCanceled(t *testing.T) {
+	called := false
+	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		called = true
+		return nil, context.Canceled
+	})}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, ok := fetchLogoAsDataURLContext(ctx, client, mustParseURL(t, "https://example.com/icon.png")); ok {
+		t.Fatal("fetchLogoAsDataURLContext() succeeded with a canceled context")
+	}
+	if called {
+		t.Fatal("fetchLogoAsDataURLContext() dispatched a request after cancellation")
 	}
 }
 
