@@ -8,6 +8,7 @@ HANDOFF.md
 IMPLEMENTATION*.md
 /artifacts/
 .env
+.local-dev/
 subconv-next-linux-*
 .tmpinspect/
 !openwrt/

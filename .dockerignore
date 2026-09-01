@@ -1,4 +1,8 @@
 .git
+.env
+.local-dev
+artifacts
 dist
 data
+checksums.txt
 *.log

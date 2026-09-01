@@ -15,7 +15,7 @@ services:
       - FOWNER
       - DAC_OVERRIDE
     volumes:
-      - ./data:/data
+      - ${SUBCONV_DATA_HOST_DIR:-./data}:/data
 
   subconv-next:
     image: ${SUBCONV_IMAGE:-ghcr.io/earl9/subconv-next:latest}
@@ -50,8 +50,8 @@ services:
     ports:
       - "${SUBCONV_HOST_BIND:-127.0.0.1}:${SUBCONV_PORT:-9876}:${SUBCONV_PORT:-9876}"
     volumes:
-      - ./config:/config:ro
-      - ./data:/data
+      - ${SUBCONV_CONFIG_HOST_DIR:-./config}:/config:ro
+      - ${SUBCONV_DATA_HOST_DIR:-./data}:/data
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:$${SUBCONV_PORT:-9876}/healthz >/dev/null || exit 1"]
       interval: 30s
