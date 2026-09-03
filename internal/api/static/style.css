@@ -6038,3 +6038,49 @@ textarea[readonly]:focus {
     background: var(--danger-soft);
   }
 }
+
+/* Native checkboxes/radios: square intrinsic size.
+   The generic input height (38px) leaks onto them otherwise — iOS renders
+   that as a giant square and blows up toolbars on narrow screens. */
+input[type="checkbox"],
+input[type="radio"] {
+  width: 16px;
+  height: 16px;
+  min-width: 16px;
+  padding: 0;
+  flex: none;
+  accent-color: var(--primary);
+  vertical-align: middle;
+}
+
+@media (max-width: 640px) {
+  .yaml-preview-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+
+  .yaml-preview-actions {
+    flex-wrap: wrap;
+  }
+
+  .yaml-preview-actions button {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .yaml-preview-tools {
+    width: 100%;
+    gap: 10px;
+  }
+
+  .yaml-search-input {
+    width: 100%;
+    min-width: 0;
+    flex: 1 1 120px;
+  }
+
+  .wrap-toggle {
+    flex: none;
+  }
+}
