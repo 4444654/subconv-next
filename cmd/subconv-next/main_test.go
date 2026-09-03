@@ -337,3 +337,49 @@ func TestRunGenerate(t *testing.T) {
 		t.Fatalf("stdout = %q, want %q", stdout.String(), outputPath)
 	}
 }
+
+func TestPositiveIntEnvironmentOverrides(t *testing.T) {
+	t.Setenv("SUBCONV_MAX_WORKSPACES", "32")
+	t.Setenv("SUBCONV_MAX_PUBLICATIONS", "16")
+	t.Setenv("SUBCONV_MAX_CONCURRENT_REFRESHES", "2")
+
+	got, err := serveOverridesFromEnvAndFlags(map[string]bool{}, serveOverrides{})
+	if err != nil {
+		t.Fatalf("serveOverridesFromEnvAndFlags() error = %v", err)
+	}
+	if got.maxWorkspaces == nil || *got.maxWorkspaces != 32 ||
+		got.maxPublications == nil || *got.maxPublications != 16 ||
+		got.maxConcurrentRefreshes == nil || *got.maxConcurrentRefreshes != 2 {
+		t.Fatalf("serveOverridesFromEnvAndFlags() = %#v", got)
+	}
+
+	cfg := model.DefaultConfig()
+	if err := applyServeOverrides(&cfg, got); err != nil {
+		t.Fatalf("applyServeOverrides() error = %v", err)
+	}
+	if cfg.Service.MaxWorkspaces != 32 || cfg.Service.MaxPublications != 16 || cfg.Service.MaxConcurrentRefreshes != 2 {
+		t.Fatalf("resource limits after overrides = %+v", cfg.Service)
+	}
+}
+
+func TestPositiveIntEnvironmentOverridesAreOptional(t *testing.T) {
+	got, err := serveOverridesFromEnvAndFlags(map[string]bool{}, serveOverrides{})
+	if err != nil {
+		t.Fatalf("serveOverridesFromEnvAndFlags() error = %v", err)
+	}
+	if got.maxWorkspaces != nil || got.maxPublications != nil || got.maxConcurrentRefreshes != nil {
+		t.Fatalf("unset environment produced overrides: %#v", got)
+	}
+}
+
+func TestPositiveIntEnvironmentRejectsInvalidValues(t *testing.T) {
+	t.Setenv("SUBCONV_MAX_WORKSPACES", "0")
+	if _, err := serveOverridesFromEnvAndFlags(map[string]bool{}, serveOverrides{}); err == nil || !strings.Contains(err.Error(), "SUBCONV_MAX_WORKSPACES") {
+		t.Fatalf("serveOverridesFromEnvAndFlags() error = %v, want SUBCONV_MAX_WORKSPACES validation error", err)
+	}
+
+	t.Setenv("SUBCONV_MAX_WORKSPACES", "many")
+	if _, err := serveOverridesFromEnvAndFlags(map[string]bool{}, serveOverrides{}); err == nil || !strings.Contains(err.Error(), "SUBCONV_MAX_WORKSPACES") {
+		t.Fatalf("serveOverridesFromEnvAndFlags() error = %v, want SUBCONV_MAX_WORKSPACES validation error", err)
+	}
+}

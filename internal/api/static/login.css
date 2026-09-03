@@ -1,17 +1,20 @@
 :root {
   color-scheme: light;
-  --page: #edf1ed;
-  --panel: rgba(250, 252, 250, 0.78);
-  --panel-solid: #fafcfa;
-  --text: #19211b;
-  --muted: #687269;
-  --line: rgba(74, 91, 78, 0.18);
-  --line-strong: rgba(74, 91, 78, 0.32);
-  --accent: #506d58;
-  --accent-hover: #405d49;
-  --accent-soft: rgba(111, 143, 119, 0.13);
-  --danger: #9d4e4e;
-  --danger-soft: rgba(157, 78, 78, 0.09);
+  --page: #f6f8fb;
+  --panel: rgba(255, 255, 255, 0.62);
+  --panel-solid: #ffffff;
+  --text: #4d3a44;
+  --muted: #96808b;
+  --line: rgba(15, 23, 42, 0.18);
+  --line-strong: rgba(15, 23, 42, 0.32);
+  --accent: #3b82f6;
+  --accent-hover: #2563eb;
+  --accent-soft: rgba(59, 130, 246, 0.12);
+  --accent-shell: #3b82f6;
+  --accent-shell-hover: #2563eb;
+  --accent-ink: #ffffff;
+  --danger: #dc2626;
+  --danger-soft: rgba(220, 38, 38, 0.08);
 }
 
 * {
@@ -27,7 +30,7 @@ body {
   margin: 0;
   background: var(--page);
   color: var(--text);
-  font-family: "PingFang SC", "Microsoft YaHei", "SF Pro Text", -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Helvetica Neue", "Microsoft YaHei", sans-serif;
   letter-spacing: 0;
 }
 
@@ -38,8 +41,8 @@ body::before {
   pointer-events: none;
   opacity: 0.35;
   background-image:
-    linear-gradient(rgba(45, 57, 48, 0.035) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(45, 57, 48, 0.035) 1px, transparent 1px);
+    linear-gradient(rgba(15, 23, 42, 0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(15, 23, 42, 0.035) 1px, transparent 1px);
   background-size: 32px 32px;
 }
 
@@ -65,7 +68,7 @@ input {
   border-radius: 8px;
   background: var(--panel);
   box-shadow:
-    0 24px 70px rgba(35, 46, 38, 0.12),
+    0 24px 70px rgba(15, 23, 42, 0.12),
     inset 0 0 0 1px var(--line);
   backdrop-filter: blur(22px) saturate(118%);
   -webkit-backdrop-filter: blur(22px) saturate(118%);
@@ -76,7 +79,7 @@ input {
   align-items: center;
   gap: 10px;
   min-height: 36px;
-  color: #34463a;
+  color: #5c4a44;
   font-size: 14px;
   font-weight: 650;
 }
@@ -86,9 +89,9 @@ input {
   width: 34px;
   height: 34px;
   place-items: center;
-  border: 1px solid rgba(68, 93, 75, 0.2);
+  border: 1px solid rgba(220, 38, 38, 0.18);
   border-radius: 7px;
-  background: rgba(79, 111, 88, 0.1);
+  background: rgba(59, 130, 246, 0.16);
   color: var(--accent);
 }
 
@@ -135,7 +138,7 @@ input {
 }
 
 #login-form > label {
-  color: #344039;
+  color: #5c4a44;
   font-size: 13px;
   font-weight: 620;
 }
@@ -157,7 +160,7 @@ input {
 }
 
 .password-control input:hover:not(:disabled) {
-  border-color: rgba(73, 101, 81, 0.48);
+  border-color: rgba(59, 130, 246, 0.5);
 }
 
 .password-control input:focus {
@@ -217,7 +220,7 @@ input {
   min-height: 38px;
   margin: 2px 0 0;
   padding: 9px 10px;
-  border: 1px solid rgba(157, 78, 78, 0.2);
+  border: 1px solid rgba(220, 38, 38, 0.18);
   border-radius: 6px;
   background: var(--danger-soft);
   color: var(--danger);
@@ -238,19 +241,19 @@ input {
   height: 44px;
   margin-top: 6px;
   padding: 0 16px;
-  border: 1px solid rgba(35, 57, 42, 0.22);
-  border-radius: 7px;
-  background: var(--accent);
-  color: #f8fbf8;
+  border: 1px solid rgba(0, 80, 160, 0.22);
+  border-radius: 980px;
+  background: var(--accent-shell);
+  color: var(--accent-ink);
   font-weight: 650;
   cursor: pointer;
-  box-shadow: 0 8px 20px rgba(63, 88, 70, 0.16);
+  box-shadow: 0 8px 20px rgba(59, 130, 246, 0.35);
   transition: background 150ms ease, transform 150ms ease, box-shadow 150ms ease;
 }
 
 .login-submit:hover:not(:disabled) {
-  background: var(--accent-hover);
-  box-shadow: 0 10px 24px rgba(63, 88, 70, 0.2);
+  background: var(--accent-shell-hover);
+  box-shadow: 0 10px 24px rgba(59, 130, 246, 0.42);
 }
 
 .login-submit:active:not(:disabled) {
@@ -283,8 +286,8 @@ input {
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: #67866f;
-  box-shadow: 0 0 0 3px rgba(103, 134, 111, 0.12);
+  background: #3b82f6;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.16);
 }
 
 @media (max-width: 520px) {

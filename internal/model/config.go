@@ -14,6 +14,9 @@ const (
 	DefaultRefreshInterval    = 3600
 	DefaultMaxSubscriptionB   = 5 * 1024 * 1024
 	DefaultFetchTimeoutSecond = 15
+	DefaultMaxWorkspaces      = 256
+	DefaultMaxPublications    = 256
+	DefaultMaxRefreshWorkers  = 4
 	DefaultMixedPort          = 7897
 	DefaultMode               = "rule"
 	DefaultEnhancedMode       = "fake-ip"
@@ -53,6 +56,9 @@ type ServiceConfig struct {
 	AllowInsecurePublic              bool   `json:"allow_insecure_public,omitempty"`
 	MaxSubscriptionBytes             int    `json:"max_subscription_bytes"`
 	FetchTimeoutSeconds              int    `json:"fetch_timeout_seconds"`
+	MaxWorkspaces                    int    `json:"max_workspaces,omitempty"`
+	MaxPublications                  int    `json:"max_publications,omitempty"`
+	MaxConcurrentRefreshes           int    `json:"max_concurrent_refreshes,omitempty"`
 	AllowLAN                         bool   `json:"allow_lan"`
 }
 
@@ -302,6 +308,9 @@ func DefaultServiceConfig() ServiceConfig {
 		WorkspaceCleanupInterval:        3600,
 		MaxSubscriptionBytes:            DefaultMaxSubscriptionB,
 		FetchTimeoutSeconds:             DefaultFetchTimeoutSecond,
+		MaxWorkspaces:                   DefaultMaxWorkspaces,
+		MaxPublications:                 DefaultMaxPublications,
+		MaxConcurrentRefreshes:          DefaultMaxRefreshWorkers,
 	}
 }
 

@@ -1481,7 +1481,7 @@ func TestRefreshCapacityResponseReleasesNewPublication(t *testing.T) {
 	ref := createWorkspaceRefForTest(t, server, cfg)
 
 	server.refreshMu.Lock()
-	for index := 0; index < maxConcurrentRefreshes; index++ {
+	for index := 0; index < cap(server.refreshSlots); index++ {
 		key := "occupied:" + string(rune('a'+index))
 		server.refreshSlots <- struct{}{}
 		server.refreshRuns[key] = make(chan struct{})
@@ -3634,5 +3634,16 @@ func TestDecodeJSONBodyRejectsOversizedTrailingWhitespace(t *testing.T) {
 	err := decodeJSONBody(req, &payload)
 	if err == nil || !strings.Contains(err.Error(), "exceeds 1 MiB") {
 		t.Fatalf("decodeJSONBody() error = %v, want size limit error", err)
+	}
+}
+
+func TestMaskSensitiveTextMasksRuntimeHashes(t *testing.T) {
+	hash := strings.Repeat("a1b2c3d4", 8)
+	masked := maskSensitiveText("read config /data/workspaces/" + hash + "/config.json: failure")
+	if strings.Contains(masked, hash) {
+		t.Fatalf("maskSensitiveText() leaked runtime hash: %q", masked)
+	}
+	if !strings.Contains(masked, "/config.json: failure") {
+		t.Fatalf("maskSensitiveText() dropped surrounding context: %q", masked)
 	}
 }

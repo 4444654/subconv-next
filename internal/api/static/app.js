@@ -243,6 +243,7 @@ const OUTPUT_OPTIONS = [
     icon: "shield",
     badge: "不推荐",
     badgeClass: "badge-red",
+    publicHidden: true,
   },
   {
     key: "udp",
@@ -799,6 +800,15 @@ function bindEvents() {
   });
 
   document
+    .getElementById("config-import-input")
+    ?.addEventListener("change", (event) => {
+      const input = event.currentTarget;
+      const file =
+        input instanceof HTMLInputElement ? input.files?.[0] : null;
+      importLocalConfigFile(file);
+      input.value = "";
+    });
+  document
     .getElementById("generate-btn")
     .addEventListener("click", generateSubscription);
   document.getElementById("import-btn").addEventListener("click", importClash);
@@ -1210,6 +1220,8 @@ function switchWorkspace(workspace) {
 }
 
 function applyDefaultState() {
+  state.logsText = "";
+  state.logsDisplay = "";
   setValue("client-type", "mihomo");
   setValue("output-filename", DEFAULT_RENDER.output_filename);
   setValue("include-keywords", "");
@@ -1355,6 +1367,8 @@ function renderSessionBanner() {
     : '<button id="restore-published-link-btn" class="secondary-button small-button" type="button">从订阅链接恢复</button>';
   let buttons = `
     <button id="save-local-draft-btn" class="ghost-button small-button" type="button">保存草稿</button>
+    <button id="export-config-btn" class="ghost-button small-button" type="button">导出配置</button>
+    <button id="import-config-btn" class="ghost-button small-button" type="button">导入配置</button>
     ${draftCount ? '<button id="manage-local-drafts-btn" class="ghost-button small-button" type="button">管理草稿</button>' : ""}
     ${restorePublishedButton}
     <button id="clear-session-btn" class="danger-ghost-button small-button" type="button">清空会话</button>
@@ -1367,6 +1381,7 @@ function renderSessionBanner() {
     buttons = `
       <button id="restore-draft-btn" class="secondary-button small-button" type="button">${draftCount > 1 ? "恢复最近草稿" : "恢复草稿"}</button>
       <button id="manage-local-drafts-btn" class="ghost-button small-button" type="button">管理草稿</button>
+      <button id="import-config-btn" class="ghost-button small-button" type="button">导入配置</button>
       ${state.publicConverter ? "" : '<button id="restore-published-link-btn" class="ghost-button small-button" type="button">从订阅链接恢复</button>'}
       <button id="discard-draft-btn" class="ghost-button small-button" type="button">删除当前草稿</button>
     `;
@@ -1377,6 +1392,8 @@ function renderSessionBanner() {
     buttons = `
       <button id="update-local-draft-btn" class="secondary-button small-button" type="button">更新本机草稿</button>
       <button id="save-local-draft-btn" class="ghost-button small-button" type="button">另存为新草稿</button>
+      <button id="export-config-btn" class="ghost-button small-button" type="button">导出配置</button>
+      <button id="import-config-btn" class="ghost-button small-button" type="button">导入配置</button>
       <button id="manage-local-drafts-btn" class="ghost-button small-button" type="button">管理草稿</button>
       ${state.publicConverter ? "" : '<button id="restore-published-link-btn" class="ghost-button small-button" type="button">从订阅链接恢复</button>'}
       <button id="exit-draft-mode-btn" class="ghost-button small-button" type="button">退出草稿模式</button>
@@ -1399,6 +1416,14 @@ function renderSessionBanner() {
   document
     .getElementById("save-local-draft-btn")
     ?.addEventListener("click", saveLocalDraft);
+  document
+    .getElementById("export-config-btn")
+    ?.addEventListener("click", exportLocalConfig);
+  document
+    .getElementById("import-config-btn")
+    ?.addEventListener("click", () =>
+      document.getElementById("config-import-input")?.click(),
+    );
   document
     .getElementById("update-local-draft-btn")
     ?.addEventListener("click", updateLocalDraft);
@@ -1922,6 +1947,102 @@ async function discardLocalDraft() {
   showToast(nextDraft ? "已删除当前草稿，可继续恢复其它草稿。" : "已删除本机草稿。");
 }
 
+async function exportLocalConfig() {
+  if (!state.workspaceId) {
+    showToast("当前没有可导出的会话。", true);
+    return;
+  }
+  try {
+    const { config, nodeState } = await collectLocalDraftSource();
+    const payload = {
+      app: "subconv-next",
+      kind: "subconv-config",
+      version: 2,
+      exported_at: new Date().toISOString(),
+      config,
+    };
+    if (nodeState) {
+      payload.node_state = nodeState;
+    }
+    const blob = new Blob([JSON.stringify(payload, null, 2)], {
+      type: "application/json",
+    });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `subconv-config-${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    showToast("配置已导出为 JSON 文件。");
+  } catch (error) {
+    showToast("导出失败：" + (error?.message || "未知错误"), true);
+  }
+}
+
+function normalizeImportedConfigPayload(parsed) {
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return null;
+  }
+  if (parsed.kind && parsed.kind !== "subconv-config") return null;
+  const config =
+    parsed.config && typeof parsed.config === "object" ? parsed.config : null;
+  if (!config) return null;
+  const looksLikeConfig =
+    Array.isArray(config.subscriptions) ||
+    Array.isArray(config.inline) ||
+    (config.render && typeof config.render === "object") ||
+    (config.service && typeof config.service === "object");
+  if (!looksLikeConfig) return null;
+  const now = new Date().toISOString();
+  return {
+    version: 2,
+    draft_id: createLocalDraftID(),
+    draft_name: defaultLocalDraftName(config, "导入配置", {
+      time: parsed.exported_at || now,
+    }),
+    saved_at: now,
+    updated_at: now,
+    source_count: countDraftSources(config),
+    config,
+    ...(parsed.node_state && typeof parsed.node_state === "object"
+      ? { node_state: parsed.node_state }
+      : {}),
+  };
+}
+
+function importLocalConfigFile(file) {
+  if (!file) return;
+  if (file.size > 4 * 1024 * 1024) {
+    showToast("配置文件超过 4 MB，请检查文件内容。", true);
+    return;
+  }
+  const reader = new FileReader();
+  reader.onload = async () => {
+    let parsed = null;
+    try {
+      parsed = JSON.parse(String(reader.result || ""));
+    } catch (error) {
+      showToast("导入失败：文件不是有效的 JSON。", true);
+      return;
+    }
+    const payload = normalizeImportedConfigPayload(parsed);
+    if (!payload) {
+      showToast("导入失败：文件不是本工具导出的配置。", true);
+      return;
+    }
+    const draft = saveLocalDraftPayload(payload, { activate: true });
+    if (!draft?.draft_id) {
+      showToast("导入失败：配置内容无效。", true);
+      return;
+    }
+    await restoreLocalDraft(draft.draft_id);
+  };
+  reader.onerror = () => showToast("导入失败：文件读取错误。", true);
+  reader.readAsText(file);
+}
+
 function saveLocalDraft() {
   void persistLocalDraft(false);
 }
@@ -1930,13 +2051,7 @@ function updateLocalDraft() {
   void persistLocalDraft(true);
 }
 
-async function persistLocalDraft(isUpdate, options = {}) {
-  if (!state.workspaceId) {
-    showToast("当前没有可保存的会话。", true);
-    return;
-  }
-  const existing = isUpdate ? loadLocalDraft() : null;
-  const now = new Date().toISOString();
+async function collectLocalDraftSource() {
   const config = sanitizeLocalDraftConfig(buildConfigFromForm());
   config.client_type = getValue("client-type") || "mihomo";
   config.backend_url = normalizeBackendOrigin(
@@ -1946,6 +2061,17 @@ async function persistLocalDraft(isUpdate, options = {}) {
     await loadNodeStateDraft(),
     config,
   );
+  return { config, nodeState };
+}
+
+async function persistLocalDraft(isUpdate, options = {}) {
+  if (!state.workspaceId) {
+    showToast("当前没有可保存的会话。", true);
+    return;
+  }
+  const existing = isUpdate ? loadLocalDraft() : null;
+  const now = new Date().toISOString();
+  const { config, nodeState } = await collectLocalDraftSource();
   const payload = {
     version: 2,
     draft_id:
@@ -2846,10 +2972,10 @@ function renderOutputTiles() {
       <div class="option-group-list">
         ${group.items
           .map((key) => optionMap[key])
-          .filter(Boolean)
+          .filter((item) => Boolean(item) && !(state.publicConverter && item.publicHidden))
           .map(
             (item) => `
-            <label class="option-item" title="${escapeHtml(item.desc)}">
+            <label class="option-item">
               <div class="option-icon">${icon(item.icon)}</div>
               <div class="setting-body">
                 <div class="option-title-row">

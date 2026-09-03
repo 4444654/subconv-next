@@ -300,6 +300,15 @@ func Validate(cfg model.Config) error {
 	if cfg.Service.FetchTimeoutSeconds < 1 {
 		return fmt.Errorf("service.fetch_timeout_seconds must be >= 1")
 	}
+	if cfg.Service.MaxWorkspaces < 0 {
+		return fmt.Errorf("service.max_workspaces must be >= 0")
+	}
+	if cfg.Service.MaxPublications < 0 {
+		return fmt.Errorf("service.max_publications must be >= 0")
+	}
+	if cfg.Service.MaxConcurrentRefreshes < 0 {
+		return fmt.Errorf("service.max_concurrent_refreshes must be >= 0")
+	}
 	if err := validatePublicBaseURL(cfg.Service.PublicBaseURL); err != nil {
 		return fmt.Errorf("service.public_base_url: %w", err)
 	}

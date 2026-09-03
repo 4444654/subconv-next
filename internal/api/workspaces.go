@@ -259,6 +259,7 @@ func (s *Server) applyWorkspaceConfigPolicy(cfg *model.Config, ref workspaceRef)
 	cfg.Service.AllowLAN = false
 	for i := range cfg.Subscriptions {
 		cfg.Subscriptions[i].AllowLAN = false
+		cfg.Subscriptions[i].InsecureSkipVerify = false
 	}
 }
 

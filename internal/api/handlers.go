@@ -935,6 +935,9 @@ func (s *Server) validatePublicConverterConfig(cfg model.Config) error {
 		if subscription.AllowLAN {
 			return errors.New("private-network subscription access is disabled in public converter mode")
 		}
+		if subscription.InsecureSkipVerify {
+			return fmt.Errorf("subscription source %q: TLS certificate verification cannot be disabled in public converter mode", subscription.Name)
+		}
 		if err := fetcher.ValidatePublicURL(subscription.URL); err != nil {
 			return fmt.Errorf("subscription source %q: %w", subscription.Name, err)
 		}

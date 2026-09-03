@@ -2,7 +2,7 @@
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>SubConv Next 订阅转换</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <link rel="alternate icon" href="/favicon.ico" />
@@ -375,7 +375,7 @@
               </div>
 
               <div class="dns-settings">
-                <label class="option-item dns-toggle-item" title="开启后保留并输出自定义 DNS 配置">
+                <label class="option-item dns-toggle-item">
                   <div class="option-icon" data-icon-name="globe"></div>
                   <div class="setting-body">
                     <div class="option-title-row">
@@ -902,5 +902,6 @@ time.*</textarea>
     </main>
 
     <script src="/app.js" defer></script>
+    <input id="config-import-input" type="file" accept="application/json,.json" hidden />
   </body>
 </html>

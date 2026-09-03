@@ -103,6 +103,9 @@ Docker supports these environment variables:
 | `SUBCONV_PUBLIC_CONVERTER` | `false` | Expose the workspace-isolated converter UI without a login. |
 | `SUBCONV_TRUST_PROXY_HEADERS` | `false` | Use the first `X-Forwarded-For`/`X-Real-IP` address for built-in limits. Enable only when the backend is reachable exclusively through a trusted proxy. |
 | `SUBCONV_ALLOW_INSECURE_PUBLIC` | `false` | Disable management login on a non-loopback listener. Preview use only. |
+| `SUBCONV_MAX_WORKSPACES` | `256` | Cap on concurrently stored workspaces. Lower it on small hosts exposed to the Internet. |
+| `SUBCONV_MAX_PUBLICATIONS` | `256` | Cap on stored published subscriptions. |
+| `SUBCONV_MAX_CONCURRENT_REFRESHES` | `4` | Process-wide concurrent refresh limit. |
 
 Example:
 

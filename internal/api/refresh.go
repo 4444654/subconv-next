@@ -19,8 +19,7 @@ var (
 )
 
 const (
-	maxConcurrentRefreshes = 4
-	serviceRefreshKey      = "\x00service"
+	serviceRefreshKey = "\x00service"
 )
 
 type refreshOutcome struct {

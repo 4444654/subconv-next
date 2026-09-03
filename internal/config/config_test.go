@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"subconv-next/internal/model"
@@ -60,6 +61,9 @@ func TestLoadJSONAndUCIParity(t *testing.T) {
 			PublicBaseURL:                   "",
 			MaxSubscriptionBytes:            5242880,
 			FetchTimeoutSeconds:             15,
+			MaxWorkspaces:                   model.DefaultMaxWorkspaces,
+			MaxPublications:                 model.DefaultMaxPublications,
+			MaxConcurrentRefreshes:          model.DefaultMaxRefreshWorkers,
 			AllowLAN:                        false,
 		},
 		Subscriptions: []model.SubscriptionConfig{
@@ -587,5 +591,21 @@ func TestWriteJSONUsesPrivatePermissions(t *testing.T) {
 	}
 	if got := info.Mode().Perm(); got != 0o600 {
 		t.Fatalf("mode = %#o, want %#o", got, 0o600)
+	}
+}
+
+func TestValidateRejectsNegativeResourceLimits(t *testing.T) {
+	cases := map[string]func(*model.Config){
+		"max_workspaces":           func(cfg *model.Config) { cfg.Service.MaxWorkspaces = -1 },
+		"max_publications":         func(cfg *model.Config) { cfg.Service.MaxPublications = -1 },
+		"max_concurrent_refreshes": func(cfg *model.Config) { cfg.Service.MaxConcurrentRefreshes = -1 },
+	}
+	for name, mutate := range cases {
+		cfg := model.DefaultConfig()
+		mutate(&cfg)
+		err := Validate(cfg)
+		if err == nil || !strings.Contains(err.Error(), name) {
+			t.Fatalf("Validate() error = %v, want %s validation error", err, name)
+		}
 	}
 }

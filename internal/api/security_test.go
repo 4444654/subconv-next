@@ -766,3 +766,59 @@ func TestRequestRateLimiter(t *testing.T) {
 		t.Fatal("request after the rate window should be allowed")
 	}
 }
+
+func TestPublicConverterRejectsInsecureSkipVerify(t *testing.T) {
+	cfg := model.DefaultConfig()
+	cfg.Service.ListenAddr = "0.0.0.0"
+	cfg.Service.PublicConverter = true
+	server, _ := newTestServer(t, cfg)
+
+	insecure := model.DefaultConfig()
+	insecure.Subscriptions = []model.SubscriptionConfig{
+		{Name: "insecure", URL: "https://example.com/sub", InsecureSkipVerify: true},
+	}
+	if err := server.validatePublicConverterConfig(insecure); err == nil {
+		t.Fatal("public converter accepted subscription.insecure_skip_verify=true")
+	}
+}
+
+func TestPublicWorkspacePolicyForcesCertificateVerification(t *testing.T) {
+	cfg := model.DefaultConfig()
+	cfg.Service.PublicConverter = true
+	server, _ := newTestServer(t, cfg)
+	ref, err := server.createWorkspace()
+	if err != nil {
+		t.Fatalf("createWorkspace() error = %v", err)
+	}
+
+	stale := model.DefaultConfig()
+	stale.Subscriptions = []model.SubscriptionConfig{
+		{Name: "stale", URL: "https://example.com/sub", AllowLAN: true, InsecureSkipVerify: true},
+	}
+	server.applyWorkspaceConfigPolicy(&stale, ref)
+	if stale.Subscriptions[0].InsecureSkipVerify || stale.Subscriptions[0].AllowLAN {
+		t.Fatalf("public policy kept unsafe subscription flags: %+v", stale.Subscriptions[0])
+	}
+}
+
+func TestServerResourceLimitsFollowConfiguration(t *testing.T) {
+	cfg := model.DefaultConfig()
+	cfg.Service.PublicConverter = true
+	cfg.Service.MaxWorkspaces = 1
+	cfg.Service.MaxPublications = 1
+	server, _ := newTestServer(t, cfg)
+
+	if _, err := server.createWorkspace(); err != nil {
+		t.Fatalf("first createWorkspace() error = %v", err)
+	}
+	if _, err := server.createWorkspace(); !errors.Is(err, errWorkspaceLimitReached) {
+		t.Fatalf("second createWorkspace() error = %v, want errWorkspaceLimitReached", err)
+	}
+
+	if _, err := server.createPublished("w1"); err != nil {
+		t.Fatalf("first createPublished() error = %v", err)
+	}
+	if _, err := server.createPublished("w2"); !errors.Is(err, errPublishedLimitReached) {
+		t.Fatalf("second createPublished() error = %v, want errPublishedLimitReached", err)
+	}
+}

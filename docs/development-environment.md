@@ -127,6 +127,10 @@ are lost.
   random characters for a non-loopback listener.
 - `SUBCONV_PUBLIC_CONVERTER=true` enables anonymous, isolated converter
   workspaces while management routes remain protected by the token.
+- `SUBCONV_MAX_WORKSPACES`, `SUBCONV_MAX_PUBLICATIONS`, and
+  `SUBCONV_MAX_CONCURRENT_REFRESHES` are positive-integer resource caps
+  (defaults 256, 256, and 4); lower them on small hosts exposed to the
+  Internet.
 - Never use `SUBCONV_ALLOW_INSECURE_PUBLIC=true` on a reachable host.
 - Keep `SUBCONV_PUBLIC_BASE_URL` empty for local-only use.
 

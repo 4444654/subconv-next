@@ -256,15 +256,18 @@ func runServe(args []string, stderr io.Writer) int {
 }
 
 type serveOverrides struct {
-	host                string
-	port                int
-	dataDir             string
-	publicBaseURL       string
-	logLevel            string
-	accessToken         string
-	publicConverter     *bool
-	trustProxyHeaders   *bool
-	allowInsecurePublic *bool
+	host                   string
+	port                   int
+	dataDir                string
+	publicBaseURL          string
+	logLevel               string
+	accessToken            string
+	publicConverter        *bool
+	trustProxyHeaders      *bool
+	allowInsecurePublic    *bool
+	maxWorkspaces          *int
+	maxPublications        *int
+	maxConcurrentRefreshes *int
 }
 
 func loadServeConfig(path string) (model.Config, error) {
@@ -299,16 +302,31 @@ func serveOverridesFromEnvAndFlags(explicitFlags map[string]bool, flags serveOve
 	if err != nil {
 		return serveOverrides{}, err
 	}
+	maxWorkspaces, err := positiveIntOverrideFromEnv("SUBCONV_MAX_WORKSPACES")
+	if err != nil {
+		return serveOverrides{}, err
+	}
+	maxPublications, err := positiveIntOverrideFromEnv("SUBCONV_MAX_PUBLICATIONS")
+	if err != nil {
+		return serveOverrides{}, err
+	}
+	maxConcurrentRefreshes, err := positiveIntOverrideFromEnv("SUBCONV_MAX_CONCURRENT_REFRESHES")
+	if err != nil {
+		return serveOverrides{}, err
+	}
 	return serveOverrides{
-		host:                stringOverride("SUBCONV_HOST", flags.host, explicitFlags["host"]),
-		port:                intOverride(envPort, flags.port, explicitFlags["port"]),
-		dataDir:             stringOverride("SUBCONV_DATA_DIR", flags.dataDir, explicitFlags["data-dir"]),
-		publicBaseURL:       stringOverride("SUBCONV_PUBLIC_BASE_URL", flags.publicBaseURL, explicitFlags["public-base-url"]),
-		logLevel:            stringOverride("SUBCONV_LOG_LEVEL", flags.logLevel, explicitFlags["log-level"]),
-		accessToken:         strings.TrimSpace(os.Getenv("SUBCONV_ACCESS_TOKEN")),
-		publicConverter:     publicConverter,
-		trustProxyHeaders:   trustProxyHeaders,
-		allowInsecurePublic: allowInsecurePublic,
+		host:                   stringOverride("SUBCONV_HOST", flags.host, explicitFlags["host"]),
+		port:                   intOverride(envPort, flags.port, explicitFlags["port"]),
+		dataDir:                stringOverride("SUBCONV_DATA_DIR", flags.dataDir, explicitFlags["data-dir"]),
+		publicBaseURL:          stringOverride("SUBCONV_PUBLIC_BASE_URL", flags.publicBaseURL, explicitFlags["public-base-url"]),
+		logLevel:               stringOverride("SUBCONV_LOG_LEVEL", flags.logLevel, explicitFlags["log-level"]),
+		accessToken:            strings.TrimSpace(os.Getenv("SUBCONV_ACCESS_TOKEN")),
+		publicConverter:        publicConverter,
+		trustProxyHeaders:      trustProxyHeaders,
+		allowInsecurePublic:    allowInsecurePublic,
+		maxWorkspaces:          maxWorkspaces,
+		maxPublications:        maxPublications,
+		maxConcurrentRefreshes: maxConcurrentRefreshes,
 	}, nil
 }
 
@@ -327,6 +345,18 @@ func boolOverrideFromEnv(name string) (*bool, error) {
 	default:
 		return nil, fmt.Errorf("%s must be true or false", name)
 	}
+}
+
+func positiveIntOverrideFromEnv(name string) (*int, error) {
+	raw, exists := os.LookupEnv(name)
+	if !exists || strings.TrimSpace(raw) == "" {
+		return nil, nil
+	}
+	value, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil || value < 1 {
+		return nil, fmt.Errorf("%s must be a positive integer", name)
+	}
+	return &value, nil
 }
 
 func parseOptionalEnvPort(key string) (int, error) {
@@ -387,6 +417,15 @@ func applyServeOverrides(cfg *model.Config, overrides serveOverrides) error {
 	}
 	if overrides.allowInsecurePublic != nil {
 		cfg.Service.AllowInsecurePublic = *overrides.allowInsecurePublic
+	}
+	if overrides.maxWorkspaces != nil {
+		cfg.Service.MaxWorkspaces = *overrides.maxWorkspaces
+	}
+	if overrides.maxPublications != nil {
+		cfg.Service.MaxPublications = *overrides.maxPublications
+	}
+	if overrides.maxConcurrentRefreshes != nil {
+		cfg.Service.MaxConcurrentRefreshes = *overrides.maxConcurrentRefreshes
 	}
 	if value := strings.TrimSpace(overrides.dataDir); value != "" {
 		if !filepath.IsAbs(value) {

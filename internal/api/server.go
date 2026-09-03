@@ -58,6 +58,19 @@ type Server struct {
 func NewServer(version string, cfg model.Config) *Server {
 	now := time.Now().UTC()
 
+	maxWorkspaces := cfg.Service.MaxWorkspaces
+	if maxWorkspaces <= 0 {
+		maxWorkspaces = model.DefaultMaxWorkspaces
+	}
+	maxPublications := cfg.Service.MaxPublications
+	if maxPublications <= 0 {
+		maxPublications = model.DefaultMaxPublications
+	}
+	maxRefreshWorkers := cfg.Service.MaxConcurrentRefreshes
+	if maxRefreshWorkers <= 0 {
+		maxRefreshWorkers = model.DefaultMaxRefreshWorkers
+	}
+
 	return &Server{
 		version: version,
 		config:  cfg,
@@ -76,9 +89,9 @@ func NewServer(version string, cfg model.Config) *Server {
 		workspaceStatus:     map[string]model.RuntimeStatus{},
 		workspaceLogs:       map[string][]string{},
 		refreshRuns:         map[string]chan struct{}{},
-		refreshSlots:        make(chan struct{}, maxConcurrentRefreshes),
-		maxWorkspaces:       256,
-		maxPublications:     256,
+		refreshSlots:        make(chan struct{}, maxRefreshWorkers),
+		maxWorkspaces:       maxWorkspaces,
+		maxPublications:     maxPublications,
 		publishedTokenIndex: map[string]string{},
 		publishedAccess:     map[string]*publishedAccessState{},
 	}
@@ -184,11 +197,19 @@ func (s *Server) snapshotWorkspaceLogs(workspaceHash string, tail int) []string 
 	return maskLogLines(lines[len(lines)-tail:])
 }
 
+// maskWorkspaceLogPaths hides server filesystem paths from workspace-facing
+// logs, which anonymous public-mode workspace holders can read.
+var workspaceLogPathPattern = regexp.MustCompile(`(^|[\s"'(=])((?:/[A-Za-z0-9._-]+){2,})`)
+
+func maskWorkspaceLogPaths(value string) string {
+	return workspaceLogPathPattern.ReplaceAllString(value, "$1[redacted-path]")
+}
+
 func (s *Server) appendWorkspaceLog(workspaceHash, message string) {
 	if strings.TrimSpace(workspaceHash) == "" || message == "" {
 		return
 	}
-	line := fmt.Sprintf("%s %s", time.Now().UTC().Format(time.RFC3339), maskSensitiveText(message))
+	line := fmt.Sprintf("%s %s", time.Now().UTC().Format(time.RFC3339), maskSensitiveText(maskWorkspaceLogPaths(message)))
 	s.mu.Lock()
 	lines := append(s.workspaceLogs[workspaceHash], line)
 	if len(lines) > 500 {
@@ -460,6 +481,7 @@ var (
 	publishedPathPattern = regexp.MustCompile(`/s/[^/\s]+/[^?#\s]+`)
 	schemeSecretPattern  = regexp.MustCompile(`(?i)\b(ss|trojan|anytls|tuic|vless|vmess|wireguard|socks5|http)://([^@/\s]+)@`)
 	uuidPattern          = regexp.MustCompile(`(?i)\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b`)
+	longHexPattern       = regexp.MustCompile(`(?i)\b[0-9a-f]{64}\b`)
 	secretPairPattern    = regexp.MustCompile(`(?i)\b(password|uuid|token|private[-_ ]?key|pre[-_ ]?shared[-_ ]?key|authorization|cookie)\s*[:=]\s*[^,\s"']+`)
 )
 
@@ -472,6 +494,9 @@ func maskSensitiveText(value string) string {
 	masked = publishedPathPattern.ReplaceAllString(masked, "/s/<redacted>/<file>")
 	masked = schemeSecretPattern.ReplaceAllString(masked, `$1://***@`)
 	masked = uuidPattern.ReplaceAllString(masked, "***")
+	// Workspace/publication directories and content hashes are runtime
+	// details; mask them so API errors and logs do not disclose server layout.
+	masked = longHexPattern.ReplaceAllString(masked, "***")
 	masked = secretPairPattern.ReplaceAllStringFunc(masked, maskSecretPair)
 	masked = maskHeaderValue(masked, "authorization")
 	masked = maskHeaderValue(masked, "cookie")

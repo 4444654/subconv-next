@@ -35,6 +35,10 @@ services:
       SUBCONV_PUBLIC_CONVERTER: ${SUBCONV_PUBLIC_CONVERTER:-false}
       SUBCONV_TRUST_PROXY_HEADERS: ${SUBCONV_TRUST_PROXY_HEADERS:-false}
       SUBCONV_ALLOW_INSECURE_PUBLIC: ${SUBCONV_ALLOW_INSECURE_PUBLIC:-false}
+      # Optional resource caps (positive integers; empty keeps the 256/256/4 defaults).
+      SUBCONV_MAX_WORKSPACES: ${SUBCONV_MAX_WORKSPACES:-}
+      SUBCONV_MAX_PUBLICATIONS: ${SUBCONV_MAX_PUBLICATIONS:-}
+      SUBCONV_MAX_CONCURRENT_REFRESHES: ${SUBCONV_MAX_CONCURRENT_REFRESHES:-}
     restart: unless-stopped
     depends_on:
       subconv-data-init:
