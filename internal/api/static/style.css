@@ -5681,6 +5681,21 @@ select:focus {
   box-shadow: none;
 }
 
+.result-link-row input {
+  border-radius: var(--radius-control);
+}
+
+.result-link-row .small-button,
+.result-link-row .secondary-button,
+.result-link-row .ghost-button,
+.result-actions .primary-button,
+.result-actions .secondary-button,
+.result-actions .ghost-button,
+.result-actions .danger-solid-button,
+.result-actions .danger-ghost-button {
+  border-radius: var(--radius-control);
+}
+
 /* Buttons: 8px radius, flat, no lift, no glow */
 .primary-button,
 .secondary-button,
@@ -5802,6 +5817,7 @@ select:focus {
 .rule-chip {
   border-color: var(--border);
   background: #ffffff;
+  color: var(--text-main);
 }
 
 .rule-chip:hover {
@@ -5811,12 +5827,26 @@ select:focus {
 .rule-chip.selected {
   border-color: var(--primary-border);
   background: var(--primary-soft);
+  color: var(--primary-ink);
 }
 
 .rule-chip-check,
 .rule-icon,
 .chip-check-icon {
   color: var(--primary-ink);
+}
+
+/* Typography: never pure black — always the zinc ink scale */
+h1, h2, h3, h4,
+.modal-head h3,
+.panel-head h2,
+.panel-head h3,
+.card-title h2 {
+  color: var(--text-main);
+}
+
+.source-emoji-suffix {
+  color: var(--text-main);
 }
 
 .badge-blue,
