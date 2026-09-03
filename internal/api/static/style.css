@@ -1,7 +1,7 @@
 :root {
   --ui-scale: 1;
-  --page-max-width: 1460px;
-  --page-max-width-wide: 1520px;
+  --page-max-width: 1600px;
+  --page-max-width-wide: 1640px;
   --page-padding-x: 24px;
   --page-padding-y: 16px;
   --layout-gap: 16px;
@@ -1740,7 +1740,11 @@ textarea {
 
 .custom-rule-item-actions {
   display: flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  align-items: center;
   gap: 6px;
+  flex-shrink: 0;
 }
 
 .custom-rule-payload-tools {
@@ -3238,14 +3242,14 @@ button:disabled {
 
 @media (min-width: 1800px) {
   :root {
-    --page-max-width: 1520px;
+    --page-max-width: 1680px;
     --sidebar-width: 350px;
   }
 }
 
 @media (max-width: 1439px) {
   :root {
-    --page-max-width: 1320px;
+    --page-max-width: 1400px;
     --sidebar-width: 320px;
   }
 
