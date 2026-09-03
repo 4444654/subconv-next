@@ -5849,6 +5849,20 @@ h1, h2, h3, h4,
   color: var(--text-main);
 }
 
+/* Read-only fields: muted fill so they never read as editable */
+input[readonly],
+textarea[readonly] {
+  background: var(--bg-soft);
+  color: var(--text-muted);
+  cursor: default;
+}
+
+input[readonly]:focus,
+textarea[readonly]:focus {
+  border-color: var(--border);
+  box-shadow: none;
+}
+
 .badge-blue,
 .mini-badge.modified,
 .region-badge {
@@ -5960,6 +5974,11 @@ h1, h2, h3, h4,
 /* Node table */
 .node-table-wrap {
   border-color: var(--border);
+}
+
+/* Confirm popover needs headroom inside the scroll container */
+.node-table-wrap:has(.node-popconfirm) {
+  padding-bottom: 160px;
 }
 
 .node-table thead th {

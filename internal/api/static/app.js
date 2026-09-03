@@ -6183,7 +6183,7 @@ function renderNodeTable() {
         .querySelector(
           `[data-node-delete-cancel="${CSS.escape(state.activeNodeDeletePopoverId)}"]`,
         )
-        ?.focus();
+        ?.focus({ preventScroll: true });
     });
   }
 }
