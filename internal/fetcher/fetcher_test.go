@@ -6,9 +6,11 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -69,6 +71,47 @@ func TestFetchSuccessAndCacheFallback(t *testing.T) {
 	}
 	if len(warnings) != 1 {
 		t.Fatalf("warnings = %#v, want one cache warning", warnings)
+	}
+}
+
+func TestFetchClosesPerRequestTransportConnections(t *testing.T) {
+	var openConnections atomic.Int64
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("subscription"))
+	}))
+	server.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+		switch state {
+		case http.StateNew:
+			openConnections.Add(1)
+		case http.StateClosed:
+			openConnections.Add(-1)
+		}
+	}
+	server.Start()
+	defer server.Close()
+
+	f := New(Options{
+		CacheDir:          t.TempDir(),
+		Timeout:           2 * time.Second,
+		MaxBodyBytes:      1024,
+		AllowPrivateHosts: true,
+		Resolver: staticResolver{
+			ips: []net.IPAddr{{IP: net.ParseIP("127.0.0.1")}},
+		},
+	})
+	source := Source{Name: "transport-lifecycle", URL: server.URL, Enabled: true, AllowPrivateHosts: true}
+	for i := 0; i < 20; i++ {
+		if _, _, err := f.Fetch(context.Background(), source); err != nil {
+			t.Fatalf("Fetch() error on request %d: %v", i, err)
+		}
+	}
+
+	deadline := time.Now().Add(time.Second)
+	for openConnections.Load() != 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := openConnections.Load(); got != 0 {
+		t.Fatalf("open connections after fetches = %d, want 0", got)
 	}
 }
 

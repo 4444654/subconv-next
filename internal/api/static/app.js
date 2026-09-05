@@ -621,6 +621,13 @@ const SOURCE_PREFIX_MODES = [
   { value: "none", label: "不显示" },
 ];
 const CHINA_TIME_ZONE = "Asia/Shanghai";
+const WORKSPACE_TITLES = {
+  config: "配置生成",
+  nodes: "节点编辑",
+  yaml: "YAML 预览",
+  diagnostics: "诊断日志",
+};
+const WORKSPACE_KEYS = Object.keys(WORKSPACE_TITLES);
 
 const state = {
   authRequired: false,
@@ -706,6 +713,8 @@ const state = {
   activeRuleSubtab: "builtin",
   activeNodeDialogTab: "basic",
   activeEmojiPopover: null,
+  shortcutChordPending: false,
+  shortcutChordTimer: null,
 };
 
 document.addEventListener("DOMContentLoaded", () => {
@@ -1122,8 +1131,27 @@ function bindEvents() {
       renderNodeTable();
     }
   });
-  document.addEventListener("keydown", (event) => {
-    if (event.key !== "Escape") return;
+  document.addEventListener("keydown", handleGlobalKeydown);
+  window.addEventListener("resize", () => {
+    if (state.activeEmojiPopover) closeEmojiPopover();
+    syncYamlGutter();
+  });
+  window.addEventListener("hashchange", () => {
+    const workspace = workspaceFromLocation();
+    if (workspace !== state.activeWorkspace) switchWorkspace(workspace, { skipHistory: true });
+  });
+  window.addEventListener(
+    "scroll",
+    () => {
+      if (!state.activeEmojiPopover) return;
+      closeEmojiPopover();
+    },
+    true,
+  );
+}
+
+function handleGlobalKeydown(event) {
+  if (event.key === "Escape") {
     if (state.activeEmojiPopover) {
       closeEmojiPopover();
       return;
@@ -1135,20 +1163,55 @@ function bindEvents() {
     if (state.activeNodeDeletePopoverId) {
       state.activeNodeDeletePopoverId = "";
       renderNodeTable();
+      return;
     }
-  });
-  window.addEventListener("resize", () => {
-    if (state.activeEmojiPopover) closeEmojiPopover();
-    syncYamlGutter();
-  });
-  window.addEventListener(
-    "scroll",
-    () => {
-      if (!state.activeEmojiPopover) return;
-      closeEmojiPopover();
-    },
-    true,
+    document.querySelectorAll("dialog[open]").forEach((dialog) => dialog.close());
+    return;
+  }
+
+  const target = event.target;
+  const editing = target instanceof HTMLElement && (
+    target.matches("input, textarea, select") || target.isContentEditable
   );
+
+  if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+    if (state.activeWorkspace === "config" && !state.generationInFlight) {
+      event.preventDefault();
+      void generateSubscription();
+    }
+    return;
+  }
+
+  if (editing || event.metaKey || event.ctrlKey || event.altKey) return;
+
+  const key = event.key.toLowerCase();
+  if (key === "g") {
+    state.shortcutChordPending = true;
+    window.clearTimeout(state.shortcutChordTimer);
+    state.shortcutChordTimer = window.setTimeout(() => {
+      state.shortcutChordPending = false;
+    }, 900);
+    return;
+  }
+
+  if (state.shortcutChordPending) {
+    const workspace = { c: "config", n: "nodes", y: "yaml", d: "diagnostics" }[key];
+    state.shortcutChordPending = false;
+    window.clearTimeout(state.shortcutChordTimer);
+    if (workspace) {
+      event.preventDefault();
+      switchWorkspace(workspace);
+    }
+    return;
+  }
+
+  if (key === "/") {
+    const search = document.getElementById("node-search");
+    if (search && state.activeWorkspace === "nodes") {
+      event.preventDefault();
+      search.focus();
+    }
+  }
 }
 
 function handleLiveFieldUpdates(event) {
@@ -1195,8 +1258,28 @@ function handleLiveFieldUpdates(event) {
   updateSummary();
 }
 
-function switchWorkspace(workspace) {
+function workspaceFromLocation() {
+  const hash = String(window.location.hash || "").replace(/^#/, "").trim().toLowerCase();
+  if (WORKSPACE_KEYS.includes(hash)) return hash;
+  const stored = window.localStorage.getItem("subconv-active-workspace");
+  return WORKSPACE_KEYS.includes(stored) ? stored : "config";
+}
+
+function renderWorkspaceTabState() {
+  document.querySelectorAll(".workspace-tab").forEach((button) => {
+    button.setAttribute("aria-current", button.dataset.workspace === state.activeWorkspace ? "page" : "false");
+  });
+}
+
+function switchWorkspace(workspace, options = {}) {
+  if (!WORKSPACE_KEYS.includes(workspace)) workspace = "config";
   state.activeWorkspace = workspace;
+  window.localStorage.setItem("subconv-active-workspace", workspace);
+  if (!options.skipHistory && window.location.hash !== `#${workspace}`) {
+    window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}#${workspace}`);
+  }
+  document.title = `${WORKSPACE_TITLES[workspace]} · SubConv Next`;
+  renderWorkspaceTabState();
   document.querySelectorAll("[data-workspace]").forEach((button) => {
     button.classList.toggle("active", button.dataset.workspace === workspace);
   });
@@ -1249,7 +1332,7 @@ function applyDefaultState() {
   setValue("node-status-filter", "all");
   setValue("node-source-filter", "");
   setValue("node-page-size", "25");
-  state.activeWorkspace = "config";
+  state.activeWorkspace = workspaceFromLocation();
   state.activeSourceMode = "rules";
   state.ruleMode = DEFAULT_RENDER.rule_mode;
   state.enabledRules = new Set(DEFAULT_RENDER.enabled_rules);
@@ -1317,6 +1400,11 @@ function applyDefaultState() {
   renderConfigNodeSummary();
   renderDiagnostics();
   renderSessionBanner();
+  if (state.activeWorkspace !== "config") {
+    resetCustomRuleForm();
+    switchWorkspace(state.activeWorkspace, { skipHistory: true });
+    return;
+  }
   resetCustomRuleForm();
   switchWorkspace("config");
 }

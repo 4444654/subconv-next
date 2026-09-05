@@ -308,7 +308,32 @@ func (f *Fetcher) doRequest(ctx context.Context, target *url.URL, resolvedIP net
 		return nil, fmt.Errorf("build request: %w", err)
 	}
 	req.Header.Set("User-Agent", userAgentOrDefault(source.UserAgent))
-	return client.Do(req)
+	resp, err := client.Do(req)
+	if err != nil {
+		transport.CloseIdleConnections()
+		return nil, err
+	}
+	// Each request uses a transport with a destination-specific dialer. Close
+	// its idle pool when the caller finishes consuming the response so refresh
+	// cycles do not retain one idle connection pool per source request.
+	resp.Body = &closeIdleBody{
+		ReadCloser: resp.Body,
+		closeIdle:  transport.CloseIdleConnections,
+	}
+	return resp, nil
+}
+
+type closeIdleBody struct {
+	io.ReadCloser
+	closeIdle func()
+}
+
+func (body *closeIdleBody) Close() error {
+	err := body.ReadCloser.Close()
+	if body.closeIdle != nil {
+		body.closeIdle()
+	}
+	return err
 }
 
 func (f *Fetcher) resolveHost(ctx context.Context, host string, allowPrivateHosts bool) (net.IP, error) {
