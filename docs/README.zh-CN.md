@@ -4,7 +4,7 @@
 
 SubConv Next 是面向 Mihomo / Clash Meta 的自托管订阅转换工具。单个 Go 二进制提供转换 API 和 Web UI，可聚合上游订阅、编辑节点、管理分流规则、生成经过校验的 Mihomo YAML，并发布随机私密订阅链接。
 
-项目支持 Docker 部署，以及基于 procd、UCI、rpcd、ACL 和 LuCI JavaScript View 的原生 OpenWrt 集成。
+Docker 是推荐的部署方式。项目也包含基于 procd、UCI、rpcd、ACL 和 LuCI JavaScript View 的原生 OpenWrt 集成。
 
 ## 功能特性
 
@@ -50,29 +50,9 @@ SubConv Next 是面向 Mihomo / Clash Meta 的自托管订阅转换工具。单�
 
 ### Docker Compose
 
-创建 `docker-compose.yml`：
+仓库已提供加固后的 [docker-compose.yml](../docker-compose.yml)：自动初始化 `/data` 的非特权用户权限，`/config` 只读挂载，并默认只在本机回环地址发布 Web 端口。
 
-```yaml
-services:
-  subconv-next:
-    image: ghcr.io/earl9/subconv-next:latest
-    container_name: subconv-next
-    restart: unless-stopped
-    ports:
-      - "127.0.0.1:9876:9876"
-    volumes:
-      - ./config:/config:ro
-      - ./data:/data
-    environment:
-      SUBCONV_HOST: 0.0.0.0
-      SUBCONV_PORT: 9876
-      SUBCONV_DATA_DIR: /data
-      SUBCONV_LOG_LEVEL: info
-      SUBCONV_ACCESS_TOKEN: ${SUBCONV_ACCESS_TOKEN:-}
-      SUBCONV_PUBLIC_CONVERTER: ${SUBCONV_PUBLIC_CONVERTER:-false}
-```
-
-启动并检查健康状态：
+在仓库根目录启动并检查健康状态：
 
 ```sh
 mkdir -p config data
@@ -81,7 +61,9 @@ docker compose up -d
 curl -fsS http://127.0.0.1:9876/healthz
 ```
 
-访问 <http://127.0.0.1:9876/>。
+访问 <http://127.0.0.1:9876/>，使用 `SUBCONV_ACCESS_TOKEN` 登录。请妥善保存生成的令牌，并在更新时复用，不要将其提交到仓库。
+
+此方式需要 Docker Engine 和 Compose v2 插件。只有 Docker Engine 时，可按 [独立 Docker 启动说明](docker.md#standalone-docker) 部署。局域网访问时，在启动前设置 `SUBCONV_HOST_BIND=0.0.0.0`，并保留高强度 Access Token。本地镜像构建、更新、持久化、备份和反向代理说明见 [Docker 部署](docker.md)。
 
 使用 `ghcr.io/earl9/subconv-next:latest` 跟随发布版本；需要可重复部署时请固定具体版本标签。
 

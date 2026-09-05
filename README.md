@@ -4,7 +4,7 @@
 
 SubConv Next is a self-hosted subscription converter for Mihomo / Clash Meta. A single Go binary provides the conversion API and Web UI for aggregating upstream subscriptions, editing nodes, managing routing rules, generating validated Mihomo YAML, and publishing private subscription links.
 
-It supports Docker deployments and a native OpenWrt integration built around procd, UCI, rpcd, ACLs, and LuCI JavaScript views.
+Docker is the recommended deployment path. The project also includes a native OpenWrt integration built around procd, UCI, rpcd, ACLs, and LuCI JavaScript views.
 
 ## Highlights
 
@@ -50,29 +50,9 @@ Supported protocols include `ss`, `ssr`, `vmess`, `vless`, `trojan`, `hysteria2`
 
 ### Docker Compose
 
-Create `docker-compose.yml`:
+The repository includes a hardened [docker-compose.yml](docker-compose.yml). It initializes `/data` ownership for the unprivileged container user, mounts `/config` read-only, and publishes the web port on loopback by default.
 
-```yaml
-services:
-  subconv-next:
-    image: ghcr.io/earl9/subconv-next:latest
-    container_name: subconv-next
-    restart: unless-stopped
-    ports:
-      - "127.0.0.1:9876:9876"
-    volumes:
-      - ./config:/config:ro
-      - ./data:/data
-    environment:
-      SUBCONV_HOST: 0.0.0.0
-      SUBCONV_PORT: 9876
-      SUBCONV_DATA_DIR: /data
-      SUBCONV_LOG_LEVEL: info
-      SUBCONV_ACCESS_TOKEN: ${SUBCONV_ACCESS_TOKEN:-}
-      SUBCONV_PUBLIC_CONVERTER: ${SUBCONV_PUBLIC_CONVERTER:-false}
-```
-
-Start the service and check its health:
+From the repository root, start the service and check its health:
 
 ```sh
 mkdir -p config data
@@ -81,7 +61,9 @@ docker compose up -d
 curl -fsS http://127.0.0.1:9876/healthz
 ```
 
-Open <http://127.0.0.1:9876/>.
+Open <http://127.0.0.1:9876/> and sign in with `SUBCONV_ACCESS_TOKEN`. Save the generated token securely and reuse it for updates; do not commit it to the repository.
+
+This requires Docker Engine and the Compose v2 plugin. With Docker Engine only, use the [standalone Docker instructions](docs/docker.md#standalone-docker). For LAN access, set `SUBCONV_HOST_BIND=0.0.0.0` before starting and keep a strong access token. See [Docker deployment](docs/docker.md) for local image builds, updates, persistence, backups, and reverse-proxy settings.
 
 Use `ghcr.io/earl9/subconv-next:latest` to track releases, or pin a release tag for reproducible deployments.
 

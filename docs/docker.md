@@ -4,7 +4,10 @@ SubConv Next is Docker-first for V1. The image contains the Go binary and embedd
 
 ## Quick Start
 
+Use Docker Engine with the Compose v2 plugin and run these commands from the repository root, using the supplied [docker-compose.yml](../docker-compose.yml):
+
 ```sh
+mkdir -p config data
 export SUBCONV_ACCESS_TOKEN="$(openssl rand -hex 32)"
 docker compose up -d
 curl -fsS http://127.0.0.1:9876/healthz
@@ -15,6 +18,8 @@ Open:
 ```text
 http://127.0.0.1:9876/
 ```
+
+Sign in with `SUBCONV_ACCESS_TOKEN`. Keep this token in a password manager or another private location and export the same value before future updates. Do not commit tokens or runtime data to the repository.
 
 The image runs `/usr/bin/subconv-next` directly. It does not include a Go toolchain, Node.js runtime, or a baked-in runtime configuration. If `/config/config.json` is absent, the process starts from built-in defaults and applies environment overrides.
 
@@ -45,6 +50,36 @@ For a public passwordless converter, keep `9876` bound to `127.0.0.1`, put SubCo
 The backend deliberately leaves `/healthz` and `/s/{token}/...` outside the management login boundary. Published subscription URLs are bearer credentials and must be kept private.
 
 For a temporary tokenless local preview, set `SUBCONV_ALLOW_INSECURE_PUBLIC=true` explicitly. This disables the management boundary and must never be used when the host port is reachable from another machine.
+
+## Standalone Docker
+
+Compose is optional. With Docker Engine alone, prepare dedicated bind-mount directories and start the same image directly. The following ownership commands apply only to this application's `./data` directory; use a new deployment directory, not a shared data directory. When running as root, omit `sudo`.
+
+```sh
+mkdir -p config data
+sudo chown -R 10001:10001 ./data
+sudo chmod 0700 ./data
+export SUBCONV_ACCESS_TOKEN="$(openssl rand -hex 32)"
+docker run -d \
+  --name subconv-next \
+  --restart unless-stopped \
+  --init \
+  --user 10001:10001 \
+  --read-only \
+  --tmpfs /tmp:rw,noexec,nosuid,nodev,size=16m \
+  --cap-drop ALL \
+  --security-opt no-new-privileges:true \
+  -p 127.0.0.1:9876:9876 \
+  -v "$PWD/config:/config:ro" \
+  -v "$PWD/data:/data" \
+  -e SUBCONV_ACCESS_TOKEN \
+  "${SUBCONV_IMAGE:-ghcr.io/earl9/subconv-next:latest}"
+curl -fsS http://127.0.0.1:9876/healthz
+```
+
+Save the token and use it to sign in. For trusted LAN access, replace the port mapping with `-p 0.0.0.0:9876:9876` and access `http://<server-ip>:9876/`. Keep authentication enabled. `SUBCONV_HOST_BIND` is a Compose setting and does not affect a standalone `docker run` command.
+
+Do not run the Compose and standalone examples at the same time: they use the same container name and port. An optional `./config/config.json` must be readable by UID/GID `10001:10001`; without it, built-in defaults and environment variables apply.
 
 ## Persistence
 
@@ -181,14 +216,23 @@ docker compose up -d
 curl -fsS http://127.0.0.1:9876/healthz
 ```
 
-If using only local builds, build and run a local image separately:
+To deploy the checked-out source instead of a registry release, build a local image and select it explicitly. Keep the same exported access token and data directories:
 
 ```sh
 docker build -t subconv-next:local .
-docker run --rm -p 9876:9876 -v "$PWD/config:/config" -v "$PWD/data:/data" subconv-next:local
+export SUBCONV_IMAGE=subconv-next:local
+docker compose up -d
 ```
 
-Keep `./data` mounted during updates.
+For standalone Docker, pull the selected registry image (or rebuild the local image), then stop and remove only the old application container:
+
+```sh
+docker pull "${SUBCONV_IMAGE:-ghcr.io/earl9/subconv-next:latest}"
+docker stop subconv-next
+docker rm subconv-next
+```
+
+Skip `docker pull` for a local build. Repeat the `docker run` command from [Standalone Docker](#standalone-docker) with the same image selection, saved access token, and bind mounts. Do not regenerate the token or remove `./config` and `./data` during an update. Container removal leaves these host directories intact.
 
 ## Log Redaction Check
 
