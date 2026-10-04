@@ -67,6 +67,72 @@ func TestForwardedProtoRequiresExplicitProxyTrust(t *testing.T) {
 	}
 }
 
+func TestManagementLoginBehindTLSProxy(t *testing.T) {
+	const token = "a-strong-management-token"
+	for _, test := range []struct {
+		name, publicURL, host, origin, fetchSite string
+		wantStatus                               int
+	}{
+		{"missing public URL", "", "subconv.example.com", "https://subconv.example.com", "same-origin", http.StatusForbidden},
+		{"configured HTTPS", "https://subconv.example.com", "subconv.example.com", "https://subconv.example.com", "same-origin", http.StatusOK},
+		{"rewritten backend Host", "https://subconv.example.com", "127.0.0.1:9876", "https://subconv.example.com", "same-origin", http.StatusOK},
+		{"explicit default port", "https://subconv.example.com", "subconv.example.com", "https://subconv.example.com:443", "same-origin", http.StatusOK},
+		{"custom HTTPS port", "https://subconv.example.com:8443", "127.0.0.1:9876", "https://subconv.example.com:8443", "same-origin", http.StatusOK},
+		{"incorrect port", "https://subconv.example.com:8443", "subconv.example.com", "https://subconv.example.com", "same-origin", http.StatusForbidden},
+		{"incorrect scheme", "https://subconv.example.com", "subconv.example.com", "http://subconv.example.com", "same-origin", http.StatusForbidden},
+		{"incorrect domain", "https://subconv.example.com", "subconv.example.com", "https://attacker.example", "same-origin", http.StatusForbidden},
+		{"cross-site metadata", "https://subconv.example.com", "subconv.example.com", "https://subconv.example.com", "cross-site", http.StatusForbidden},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := model.DefaultConfig()
+			cfg.Service.AccessToken = token
+			cfg.Service.PublicBaseURL = test.publicURL
+			server, _ := newTestServer(t, cfg)
+			handler := server.Handler()
+			body, err := json.Marshal(authLoginRequest{Username: "admin", Password: token})
+			if err != nil {
+				t.Fatal(err)
+			}
+			req := httptest.NewRequest(http.MethodPost, "http://"+test.host+"/api/auth/login", bytes.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Origin", test.origin)
+			req.Header.Set("Sec-Fetch-Site", test.fetchSite)
+			req.Header.Set("X-Forwarded-Proto", "https")
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			if rec.Code != test.wantStatus {
+				t.Fatalf("login status=%d, want %d; body=%s", rec.Code, test.wantStatus, rec.Body.String())
+			}
+			cookies := rec.Result().Cookies()
+			if test.wantStatus != http.StatusOK {
+				if len(cookies) != 0 || !strings.Contains(rec.Body.String(), "CROSS_ORIGIN_REQUEST") {
+					t.Fatalf("rejected login cookies=%d body=%s", len(cookies), rec.Body.String())
+				}
+				return
+			}
+			if len(cookies) != 1 || !cookies[0].Secure || !cookies[0].HttpOnly {
+				t.Fatalf("HTTPS proxy login did not issue one Secure HttpOnly cookie: %+v", cookies)
+			}
+			var session authSessionResponse
+			if err := json.Unmarshal(rec.Body.Bytes(), &session); err != nil {
+				t.Fatal(err)
+			}
+			if !session.Authenticated || session.CSRFToken == "" {
+				t.Fatal("login did not create an authenticated CSRF session")
+			}
+			mutation := httptest.NewRequest(http.MethodPost, "http://"+test.host+"/api/workspaces", nil)
+			mutation.Header = req.Header.Clone()
+			mutation.Header.Set(managementCSRFHeader, session.CSRFToken)
+			mutation.AddCookie(cookies[0])
+			mutationRec := httptest.NewRecorder()
+			handler.ServeHTTP(mutationRec, mutation)
+			if mutationRec.Code != http.StatusOK {
+				t.Fatalf("authenticated mutation status=%d body=%s", mutationRec.Code, mutationRec.Body.String())
+			}
+		})
+	}
+}
+
 func TestPublicManagementAPIRequiresAccessToken(t *testing.T) {
 	cfg := model.DefaultConfig()
 	cfg.Service.ListenAddr = "0.0.0.0"

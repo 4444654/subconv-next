@@ -84,11 +84,11 @@ prepare_binary() {
         result = subprocess.run(["bash", str(self.manager)], input="0\n", env=self.env,
                                 text=True, capture_output=True)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("管理 v1.3.1", result.stdout)
+        self.assertIn("管理 v1.3.2", result.stdout)
         result = subprocess.run(["bash", str(self.manager)], input="bad\n\n0\n",
                                 env=self.env, text=True, capture_output=True)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertGreaterEqual(result.stdout.count("管理 v1.3.1"), 2)
+        self.assertGreaterEqual(result.stdout.count("管理 v1.3.2"), 2)
 
     def test_stream_execution_saves_manager_even_if_download_fails(self):
         source = self.script.read_text()
@@ -156,6 +156,30 @@ prepare_binary() {
         self.assertFalse(marker.exists())
         self.run_shell('env_set SUBCONV_PUBLIC_BASE_URL "https://example.com/a?x=1&y=2"')
         self.assertIn("SUBCONV_PUBLIC_BASE_URL=https://example.com/a?x=1&y=2", self.env_file.read_text())
+
+    def test_proxy_url_change_preserves_credentials_and_rolls_back_on_failure(self):
+        self.install()
+        self.prepare_account_binary()
+        self.run_shell("main account", input="operator\npassphrase123\npassphrase123\n")
+        data = self.root / "var/lib/subconv-next/important-data"
+        data.write_text("keep me")
+        originals = {p: p.read_bytes() for p in (self.binary, self.config, self.unit, data)}
+        settings = [line for line in self.env_file.read_text().splitlines()
+                    if not line.startswith("SUBCONV_PUBLIC_BASE_URL=")]
+        self.run_shell('main url "https://sub.example.com:8443/"')
+        self.assertIn("SUBCONV_PUBLIC_BASE_URL=https://sub.example.com:8443\n",
+                      self.env_file.read_text())
+        self.assertEqual(settings, [line for line in self.env_file.read_text().splitlines()
+                                   if not line.startswith("SUBCONV_PUBLIC_BASE_URL=")])
+        for path, content in originals.items():
+            self.assertEqual(path.read_bytes(), content)
+        original_env = self.env_file.read_bytes()
+        (self.root / "fail-health").touch()
+        self.run_shell('main url "https://other.example.com"', expected=1)
+        self.assertEqual(self.env_file.read_bytes(), original_env)
+        for path, content in originals.items():
+            self.assertEqual(path.read_bytes(), content)
+        self.assertTrue((self.root / "active").exists())
 
     def prepare_account_binary(self):
         hashed = "$2a$10$" + "A" * 53

@@ -132,7 +132,7 @@ Docker supports these environment variables:
 | `SUBCONV_HOST` | `0.0.0.0` | Listen address inside the container. |
 | `SUBCONV_PORT` | `9876` | Listen port and healthcheck port. |
 | `SUBCONV_DATA_DIR` | `/data` | Runtime state, cache, logs, and published subscriptions. |
-| `SUBCONV_PUBLIC_BASE_URL` | empty | Public origin used in generated subscription links. |
+| `SUBCONV_PUBLIC_BASE_URL` | empty | Public base URL for subscription links and expected browser API origin, including reverse proxy HTTPS login. |
 | `SUBCONV_LOG_LEVEL` | `info` | Service and render log level. |
 | `SUBCONV_ACCESS_TOKEN` | empty | Management UI/API token. Required and at least 24 characters when `SUBCONV_HOST` is non-loopback, including the default container listener. |
 | `SUBCONV_PUBLIC_CONVERTER` | `false` | Expose the workspace-isolated converter UI without a login. |
@@ -151,7 +151,7 @@ SUBCONV_PUBLIC_BASE_URL=https://subconv.example.com \
 docker compose up -d
 ```
 
-`SUBCONV_PUBLIC_BASE_URL` only changes generated subscription links returned by the API. It does not configure TLS or reverse proxy behavior.
+`SUBCONV_PUBLIC_BASE_URL` controls generated subscription links, the expected browser API origin, and Secure management cookies for HTTPS proxy access. Set it to the browser's actual scheme, host and port before logging in through a reverse proxy. It does not configure TLS certificates or reverse proxy routing.
 
 `SUBCONV_PUBLIC_CONVERTER=true` is the supported passwordless mode. It exposes only the converter allowlist and requires random workspace capabilities for stateful operations. `SUBCONV_ALLOW_INSECURE_PUBLIC=true` exposes every management operation to every reachable client and must not be used for an Internet-facing production deployment.
 

@@ -2,7 +2,7 @@
 # SubConv Next 原生安装与管理；Debian / Ubuntu amd64 / arm64，无需 Docker。
 set -Eeuo pipefail
 
-SCRIPT_VERSION="1.3.1"
+SCRIPT_VERSION="1.3.2"
 SOURCE_REPO="4444654/subconv-next"
 UPSTREAM_REPO="Earl9/subconv-next"
 BIN="/usr/local/bin/subconv-next"
@@ -324,14 +324,20 @@ activate() {
 }
 
 show_access() {
-  local host port
+  local host port public_url
   host=$(env_get SUBCONV_HOST); port=$(env_get SUBCONV_PORT)
+  public_url=$(env_get SUBCONV_PUBLIC_BASE_URL)
   printf '\n监听地址：%s:%s\n' "${host:-127.0.0.1}" "${port:-9876}"
   if [[ "$host" == 0.0.0.0 ]]; then
     printf '浏览器访问：http://服务器IP:%s/（需要安全组/防火墙放行）\n' "$port"
   else
     printf '默认仅本机访问；已有 Caddy 可反代至 127.0.0.1:%s。\n' "$port"
     printf '需要 IP:端口 访问：运行 scn bind public。\n'
+  fi
+  if [[ -n "$public_url" ]]; then
+    printf '已配置访问地址：%s（请使用此地址登录）\n' "$public_url"
+  else
+    printf '通过 HTTPS 域名反代访问前，请运行 scn url https://你的实际域名，否则登录可能被跨域校验拒绝。\n'
   fi
   printf '登录账号：%s\n' "$(env_get SUBCONV_MANAGEMENT_USERNAME)"
   if [[ -n "$(env_get SUBCONV_MANAGEMENT_PASSWORD_HASH)" ]]; then
@@ -478,7 +484,7 @@ menu_action() {
     8) main reset-token ;;
     9) read -r -p '请输入端口 [1-65535]：' value; main port "$value" ;;
     10) if [[ $(env_get SUBCONV_HOST) == 0.0.0.0 ]]; then main bind local; else main bind public; fi ;;
-    11) read -r -p '公网地址（留空清除）：' value; main url "$value" ;;
+    11) read -r -p '浏览器访问地址（如 https://sub.example.com，不含 /login，留空清除）：' value; main url "$value" ;;
     12) main update ;;
     13) main repair ;;
     14) main uninstall ;;
@@ -503,7 +509,7 @@ menu() {
     printf '  访问设置\n'
     printf '   9. 修改监听端口\n'
     printf '  10. 切换本机 / 公网访问\n'
-    printf '  11. 设置公网地址\n\n'
+    printf '  11. 设置访问地址 / 反代域名\n\n'
     printf '  安装维护\n'
     printf '  12. 安装 / 更新程序\n'
     printf '  13. 修复服务\n'
@@ -531,7 +537,7 @@ usage() {
   menu-update        将当前脚本保存为 scn 管理菜单
   port 9876          修改端口
   bind local|public  切换本机/公网监听
-  url https://sub.example.com   设置公网基础地址
+  url https://sub.example.com   设置浏览器访问地址（反代登录及订阅链接）
   url ""             清除公网基础地址
   uninstall          卸载程序，保留配置和数据
 EOF

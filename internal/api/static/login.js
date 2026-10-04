@@ -66,7 +66,9 @@ async function handleLogin(event) {
           ? "尝试次数过多，请一分钟后再试。"
           : response.status === 401
             ? "账号或密码不正确。"
-            : payload?.error?.message || "登录失败，请稍后重试。";
+            : payload?.error?.code === "CROSS_ORIGIN_REQUEST"
+              ? `访问地址与服务配置不一致，请在服务器执行 scn url ${window.location.origin}，再刷新本页登录。`
+              : payload?.error?.message || "登录失败，请稍后重试。";
       setMessage(text, true);
       passwordInput.select();
       return;

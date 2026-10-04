@@ -1,6 +1,6 @@
 # Debian / Ubuntu 原生一键安装
 
-适用于使用 systemd 的 Debian / Ubuntu VPS，支持 x86_64（amd64）和 aarch64（arm64），不需要 Docker。安装器版本：**1.3.1**。
+适用于使用 systemd 的 Debian / Ubuntu VPS，支持 x86_64（amd64）和 aarch64（arm64），不需要 Docker。安装器版本：**1.3.2**。
 
 ## 安装
 
@@ -53,7 +53,19 @@ scn bind public
 scn token
 ```
 
-在服务器安全组/防火墙放行 TCP `9876` 后，打开 `http://服务器IP:9876/`。默认账号是 **`admin`**，初始密码是 `scn token` 显示的 Token。切回本机监听：`scn bind local`。配置公网基础地址用于生成订阅链接，不会自动修改 DNS 或签发 HTTPS 证书。
+在服务器安全组/防火墙放行 TCP `9876` 后，打开 `http://服务器IP:9876/`。默认账号是 **`admin`**，初始密码是 `scn token` 显示的 Token。切回本机监听：`scn bind local`。配置访问地址同时用于浏览器 API 的同源校验和生成订阅链接，不会自动修改 DNS 或签发 HTTPS 证书。
+
+### 通过 Caddy / Nginx 反代登录
+
+反代配置好后，在 SSH 命令行执行（替换为浏览器实际使用的域名）：
+
+```bash
+scn url https://sub.example.com
+```
+
+也可打开 `scn` 菜单，选择 **11** 设置访问地址。填写协议、域名以及非默认端口（如有），不要包含 `/login`、查询参数或片段。设置会重启服务，并保留账号密码、API Token 和数据。之后通过相同地址打开登录页；如果换了域名或改用 IP 和端口访问，需要同步更新此设置。
+
+Caddy 在前端终止 HTTPS、通过 HTTP 连接本机服务时，程序默认不信任代理头。显式配置访问地址后，登录接口会按该 HTTPS 域名校验 Origin，并签发 Secure 会话 Cookie；无需为登录开启全局代理头信任。
 
 ### 设置自己的账号和密码
 
@@ -106,6 +118,7 @@ scn account
 - **服务启动失败**：执行 `scn logs` 查看原因，再运行 `scn repair`。
 - **网页打不开**：检查 `scn status` 的监听地址；默认仅本机监听。如已公网监听，再检查服务器安全组/防火墙是否放行对应端口。
 - **登录约 12 小时后需要重新登录**：这是程序的管理会话有效期，不是缺少依赖，也不影响后台 systemd 服务持续运行。
+- **登录提示 `cross-origin API request rejected`**：服务配置的访问地址与浏览器地址不一致。通过 `scn` 菜单 11 或 `scn url https://实际域名` 设置与浏览器一致的地址（包括非默认端口），再刷新登录页；不需要重置密码。
 
 ## 开发验证
 

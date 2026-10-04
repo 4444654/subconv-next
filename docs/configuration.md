@@ -52,7 +52,7 @@ subconv-next generate
 | `SUBCONV_HOST` | `0.0.0.0` | Listen address inside the container or process. |
 | `SUBCONV_PORT` | `9876` | Listen port. |
 | `SUBCONV_DATA_DIR` | `/data` | Runtime data directory. |
-| `SUBCONV_PUBLIC_BASE_URL` | empty | Public origin used in generated subscription links. |
+| `SUBCONV_PUBLIC_BASE_URL` | empty | Public base URL for subscription links and expected browser API origin, including reverse proxy HTTPS login. |
 | `SUBCONV_LOG_LEVEL` | `info` | Service and renderer log level. |
 | `SUBCONV_ACCESS_TOKEN` | empty | API token and initial web password until an independent password is configured. If set on a non-loopback listener, it must contain at least 24 characters. |
 | `SUBCONV_MANAGEMENT_USERNAME` | `admin` | Web login username; 1–64 letters, digits, `_`, `.`, `@` or `-`. |
@@ -112,7 +112,7 @@ If `/data` is not mounted, links and workspace state can be lost when the contai
 
 ## Public Base URL
 
-`SUBCONV_PUBLIC_BASE_URL` controls the origin returned by publish APIs.
+`SUBCONV_PUBLIC_BASE_URL` controls the base URL returned by publish APIs and the expected browser origin used by API same-origin checks. Behind a TLS reverse proxy, set it to the address used in the browser, including a non-default port if applicable. Native installs can use `scn url https://subconv.example.com`.
 
 Use it when SubConv Next is behind a reverse proxy:
 
@@ -120,7 +120,7 @@ Use it when SubConv Next is behind a reverse proxy:
 SUBCONV_PUBLIC_BASE_URL=https://subconv.example.com
 ```
 
-This value only changes generated URLs. It does not configure TLS, reverse proxy behavior, authentication, or firewall rules.
+This value also makes HTTPS management login cookies Secure when TLS terminates at the proxy. A missing or mismatched address can cause login to return `CROSS_ORIGIN_REQUEST`. It does not configure TLS certificates, reverse proxy routing, credentials, or firewall rules.
 
 ## Docker Example
 
