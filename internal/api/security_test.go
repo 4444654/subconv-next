@@ -156,7 +156,7 @@ func TestManagementLoginCreatesCookieSession(t *testing.T) {
 	loginPageReq.RemoteAddr = "203.0.113.30:49152"
 	loginPageRec := httptest.NewRecorder()
 	handler.ServeHTTP(loginPageRec, loginPageReq)
-	if loginPageRec.Code != http.StatusOK || !strings.Contains(loginPageRec.Body.String(), "验证管理密码") {
+	if loginPageRec.Code != http.StatusOK || !strings.Contains(loginPageRec.Body.String(), "登录管理后台") || !strings.Contains(loginPageRec.Body.String(), `autocomplete="username"`) {
 		t.Fatalf("login page status/body = %d %q", loginPageRec.Code, loginPageRec.Body.String())
 	}
 
@@ -282,7 +282,12 @@ func newPublicLoginTestServer(t *testing.T) *Server {
 
 func loginForTest(t *testing.T, handler http.Handler, remoteAddr, password string) (*http.Cookie, string) {
 	t.Helper()
-	body, err := json.Marshal(authLoginRequest{Password: password})
+	return loginAccountForTest(t, handler, remoteAddr, "admin", password)
+}
+
+func loginAccountForTest(t *testing.T, handler http.Handler, remoteAddr, username, password string) (*http.Cookie, string) {
+	t.Helper()
+	body, err := json.Marshal(authLoginRequest{Username: username, Password: password})
 	if err != nil {
 		t.Fatalf("marshal login request: %v", err)
 	}

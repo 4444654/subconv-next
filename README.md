@@ -58,7 +58,7 @@ curl -fL --retry 2 https://raw.githubusercontent.com/4444654/subconv-next/main/s
 
 If curl is missing, run `apt-get update && apt-get install -y curl ca-certificates` first. The installer creates the persistent `scn` management command before downloading the application, verifies release checksums, and falls back to building this repository from source when releases are unavailable. It enables systemd startup and checks service health; failed updates restore the previous binary and settings.
 
-Run `scn` to open the Chinese management menu. The default listener is `127.0.0.1:9876`; use a reverse proxy or run `scn bind public` and allow the port in your firewall for direct IP access. Run `scn token` to see the login token. See the [native installation guide (中文)](docs/native-install.md) for updates, recovery, paths, and troubleshooting.
+Run `scn` to open the Chinese management menu. The default listener is `127.0.0.1:9876`; use a reverse proxy or run `scn bind public` and allow the port in your firewall for direct IP access. Sign in with username `admin` and the initial password shown by `scn token`. Run `scn account` to set your own username and an independent, bcrypt-hashed web password while preserving API tokens and subscriptions. Existing installations should rerun the installer above to upgrade both the binary and manager. See the [native installation guide (中文)](docs/native-install.md) for updates, recovery, paths, and troubleshooting.
 
 ### Docker Compose
 

@@ -2,7 +2,7 @@
 # SubConv Next 原生安装与管理；Debian / Ubuntu amd64 / arm64，无需 Docker。
 set -Eeuo pipefail
 
-SCRIPT_VERSION="1.2.0"
+SCRIPT_VERSION="1.3.0"
 SOURCE_REPO="4444654/subconv-next"
 UPSTREAM_REPO="Earl9/subconv-next"
 BIN="/usr/local/bin/subconv-next"
@@ -131,6 +131,8 @@ SUBCONV_PORT=9876
 SUBCONV_DATA_DIR=${DATA_DIR}
 SUBCONV_LOG_LEVEL=info
 SUBCONV_ACCESS_TOKEN=$(openssl rand -hex 24)
+SUBCONV_MANAGEMENT_USERNAME=admin
+SUBCONV_MANAGEMENT_PASSWORD_HASH=
 SUBCONV_PUBLIC_BASE_URL=
 SUBCONV_PUBLIC_CONVERTER=false
 SUBCONV_TRUST_PROXY_HEADERS=false
@@ -142,6 +144,7 @@ EOF
   chown root:"$RUN_USER" "$ENV_FILE" "$CONFIG_JSON"
   chmod 0640 "$ENV_FILE" "$CONFIG_JSON"
   [[ -n "$(env_get SUBCONV_ACCESS_TOKEN)" ]] || env_set SUBCONV_ACCESS_TOKEN "$(openssl rand -hex 24)"
+  [[ -n "$(env_get SUBCONV_MANAGEMENT_USERNAME)" ]] || env_set SUBCONV_MANAGEMENT_USERNAME admin
   [[ -n "$(env_get SUBCONV_HOST)" ]] || env_set SUBCONV_HOST 127.0.0.1
   [[ -n "$(env_get SUBCONV_PORT)" ]] || env_set SUBCONV_PORT 9876
   [[ -n "$(env_get SUBCONV_DATA_DIR)" ]] || env_set SUBCONV_DATA_DIR "$DATA_DIR"
@@ -226,6 +229,8 @@ release_binary() {
   printf '%s  %s\n' "$expected" "$WORK_DIR/$asset" | sha256sum -c - >/dev/null || return 1
   chmod 0755 "$WORK_DIR/$asset" || return 1
   "$WORK_DIR/$asset" version >/dev/null 2>&1 || return 1
+  # Older upstream binaries cannot serve the account/password login page.
+  "$WORK_DIR/$asset" hash-password --help >/dev/null 2>&1 || return 1
   mv -f "$WORK_DIR/$asset" "$WORK_DIR/candidate" || return 1
   info "已下载并校验 ${repo} $(jq -r '.tag_name' "$WORK_DIR/release.json")。"
 }
@@ -328,7 +333,13 @@ show_access() {
     printf '默认仅本机访问；已有 Caddy 可反代至 127.0.0.1:%s。\n' "$port"
     printf '需要 IP:端口 访问：运行 scn bind public。\n'
   fi
-  printf '查看登录 Token：scn token\n管理菜单：scn\n\n'
+  printf '登录账号：%s\n' "$(env_get SUBCONV_MANAGEMENT_USERNAME)"
+  if [[ -n "$(env_get SUBCONV_MANAGEMENT_PASSWORD_HASH)" ]]; then
+    printf '登录密码：你通过 scn account 设置的密码（忘记时可重新设置）。\n'
+  else
+    printf '初始登录密码：运行 scn token 查看；可运行 scn account 设置独立密码。\n'
+  fi
+  printf '管理菜单：scn\n\n'
 }
 
 install_app() {
@@ -397,6 +408,32 @@ change_setting() {
   show_access
 }
 
+set_account() {
+  local username password confirmation hash
+  need_install
+  read -r -p "登录账号 [$(env_get SUBCONV_MANAGEMENT_USERNAME)]：" username || return 0
+  username=${username:-$(env_get SUBCONV_MANAGEMENT_USERNAME)}
+  username=${username:-admin}
+  [[ "$username" =~ ^[a-zA-Z0-9_.@-]{1,64}$ ]] || die "账号限 1–64 位英文字母、数字、_ . @ -。"
+  IFS= read -r -s -p '新密码（8–72 字节，输入不显示）：' password || return 0
+  printf '\n'
+  IFS= read -r -s -p '再次输入密码：' confirmation || return 0
+  printf '\n'
+  [[ "$password" == "$confirmation" ]] || die "两次密码不一致，未修改。"
+  lock_operation
+  # Never put the plaintext password in process arguments or an env file.
+  hash=$(printf '%s' "$password" | "$BIN" hash-password)
+  unset password confirmation
+  [[ "$hash" =~ ^\$2[aby]\$(10|11|12|13|14)\$[./a-zA-Z0-9]{53}$ ]] || die "程序未返回有效密码哈希，请先更新程序。"
+  begin_transaction
+  env_set SUBCONV_MANAGEMENT_USERNAME "$username"
+  env_set SUBCONV_MANAGEMENT_PASSWORD_HASH "$hash"
+  systemctl restart "$SERVICE"
+  health_check || die "账号设置后健康检查失败，将恢复原设置。"
+  TRANSACTION=0
+  info "账号密码已更新。请使用账号 ${username} 和新密码重新登录。"
+}
+
 set_public_url() {
   local value=${1%/}
   [[ -z "$value" || "$value" =~ ^https?://[^/?#[:space:]]+(:[0-9]+)?(/[^[:space:]]*)?$ ]] || die "请输入完整的 http:// 或 https:// 地址，留空可清除。"
@@ -444,6 +481,7 @@ menu_action() {
     11) main update ;;
     12) main repair ;;
     13) main uninstall ;;
+    14) main account ;;
     *) warn "无效选择。" ;;
   esac
 }
@@ -455,7 +493,7 @@ menu() {
     printf '1. 状态     2. 启动     3. 停止     4. 重启\n'
     printf '5. 日志     6. Token    7. 重置 Token\n'
     printf '8. 端口     9. 本机/公网监听    10. 公网域名\n'
-    printf '11. 安装/更新    12. 修复    13. 卸载    0. 退出\n'
+    printf '11. 安装/更新    12. 修复    13. 卸载    14. 设置账号密码    0. 退出\n'
     read -r -p '请选择：' choice || return 0
     [[ "$choice" != 0 ]] || return 0
     # 每次操作使用独立进程，失败或中断日志不会退出整个菜单。
@@ -474,6 +512,7 @@ usage() {
   start / stop / restart
   logs               最近 100 行日志并持续跟随，Ctrl+C 结束
   token / reset-token
+  account            设置网页登录账号和独立密码（忘记密码时也可使用）
   port 9876          修改端口
   bind local|public  切换本机/公网监听
   url https://sub.example.com   设置公网基础地址
@@ -502,8 +541,9 @@ main() {
     start|restart) need_install; lock_operation; systemctl "$action" "$SERVICE"; health_check || die "健康检查失败，请查看 scn logs。"; show_access ;;
     stop) need_install; lock_operation; systemctl stop "$SERVICE" ;;
     logs) need_install; journalctl -u "$SERVICE" -n 100 -f --no-pager ;;
-    token) need_install; printf '登录 Token：%s\n' "$(env_get SUBCONV_ACCESS_TOKEN)" ;;
+    token) need_install; printf 'API Token：%s\n' "$(env_get SUBCONV_ACCESS_TOKEN)" ;;
     reset-token) change_setting SUBCONV_ACCESS_TOKEN "$(openssl rand -hex 24)" ;;
+    account) set_account ;;
     port) change_setting SUBCONV_PORT "${2:-}" ;;
     bind)
       case "${2:-}" in local) value=127.0.0.1 ;; public) value=0.0.0.0 ;; *) die "用法：scn bind local|public" ;; esac

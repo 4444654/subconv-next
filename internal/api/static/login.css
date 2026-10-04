@@ -174,6 +174,10 @@ input {
   opacity: 0.65;
 }
 
+.username-control input {
+  padding-right: 13px;
+}
+
 .visibility-button {
   position: absolute;
   top: 5px;

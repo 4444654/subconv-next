@@ -229,6 +229,9 @@ func (s *Server) applyWorkspaceConfigPolicy(cfg *model.Config, ref workspaceRef)
 	cfg.Service.OutputPath = ref.OutputPath
 	cfg.Service.StatePath = ref.StatePath
 	cfg.Service.CacheDir = ref.CacheDir
+	// Login settings belong to the daemon, never to an editable workspace.
+	cfg.Service.ManagementUsername = ""
+	cfg.Service.ManagementPasswordHash = ""
 
 	base := s.snapshotConfig().Service
 	if !base.PublicConverter {

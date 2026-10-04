@@ -31,12 +31,16 @@
             </svg>
             管理端
           </span>
-          <h1 id="login-title">验证管理密码</h1>
+          <h1 id="login-title">登录管理后台</h1>
           <p>仅限授权管理人员访问。</p>
         </div>
 
         <form id="login-form" novalidate>
-          <label for="password">管理密码</label>
+          <label for="username">账号</label>
+          <div class="password-control username-control">
+            <input id="username" name="username" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" maxlength="64" value="admin" required disabled />
+          </div>
+          <label for="password">密码</label>
           <div class="password-control">
             <input id="password" name="password" type="password" autocomplete="current-password" required disabled />
             <button id="toggle-password" class="visibility-button" type="button" aria-label="显示密码" title="显示密码" disabled>

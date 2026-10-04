@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"subconv-next/internal/api"
+	"subconv-next/internal/authn"
 	"subconv-next/internal/backup"
 	"subconv-next/internal/config"
 	"subconv-next/internal/model"
@@ -46,6 +47,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	case "version":
 		_, _ = fmt.Fprintln(stdout, version)
 		return 0
+	case "hash-password":
+		return runHashPassword(args[1:], os.Stdin, stdout, stderr)
 	case "serve":
 		return runServe(args[1:], stderr)
 	case "parse":
@@ -73,6 +76,34 @@ func printUsage(w io.Writer) {
 	_, _ = fmt.Fprintln(w, "  parse       Parse subscription content into NodeIR")
 	_, _ = fmt.Fprintln(w, "  backup      Export, inspect, or restore application backups")
 	_, _ = fmt.Fprintln(w, "  version     Print the build version")
+	_, _ = fmt.Fprintln(w, "  hash-password  Hash a web login password read from standard input")
+}
+
+func runHashPassword(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	if len(args) == 1 && (args[0] == "--help" || args[0] == "-h") {
+		_, _ = fmt.Fprintln(stdout, "Usage: subconv-next hash-password < password-file (8–72 bytes; no trailing newline)")
+		return 0
+	}
+	if len(args) != 0 {
+		_, _ = fmt.Fprintln(stderr, "hash-password: passwords must be supplied through standard input")
+		return 2
+	}
+	password, err := io.ReadAll(io.LimitReader(stdin, 73))
+	if err != nil {
+		_, _ = fmt.Fprintln(stderr, "hash-password: could not read password")
+		return 1
+	}
+	if strings.ContainsAny(string(password), "\r\n") {
+		_, _ = fmt.Fprintln(stderr, "hash-password: password must not contain a newline")
+		return 2
+	}
+	hash, err := authn.HashPassword(string(password))
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "hash-password: %v\n", err)
+		return 2
+	}
+	_, _ = fmt.Fprintln(stdout, hash)
+	return 0
 }
 
 func runBackup(args []string, stdout, stderr io.Writer) int {
@@ -262,6 +293,8 @@ type serveOverrides struct {
 	publicBaseURL          string
 	logLevel               string
 	accessToken            string
+	managementUsername     string
+	managementPasswordHash string
 	publicConverter        *bool
 	trustProxyHeaders      *bool
 	allowInsecurePublic    *bool
@@ -321,6 +354,8 @@ func serveOverridesFromEnvAndFlags(explicitFlags map[string]bool, flags serveOve
 		publicBaseURL:          stringOverride("SUBCONV_PUBLIC_BASE_URL", flags.publicBaseURL, explicitFlags["public-base-url"]),
 		logLevel:               stringOverride("SUBCONV_LOG_LEVEL", flags.logLevel, explicitFlags["log-level"]),
 		accessToken:            strings.TrimSpace(os.Getenv("SUBCONV_ACCESS_TOKEN")),
+		managementUsername:     strings.TrimSpace(os.Getenv("SUBCONV_MANAGEMENT_USERNAME")),
+		managementPasswordHash: strings.TrimSpace(os.Getenv("SUBCONV_MANAGEMENT_PASSWORD_HASH")),
 		publicConverter:        publicConverter,
 		trustProxyHeaders:      trustProxyHeaders,
 		allowInsecurePublic:    allowInsecurePublic,
@@ -409,6 +444,12 @@ func applyServeOverrides(cfg *model.Config, overrides serveOverrides) error {
 		cfg.Service.AccessToken = value
 		cfg.Service.SubscriptionToken = value
 	}
+	if value := strings.TrimSpace(overrides.managementUsername); value != "" {
+		cfg.Service.ManagementUsername = value
+	}
+	if value := strings.TrimSpace(overrides.managementPasswordHash); value != "" {
+		cfg.Service.ManagementPasswordHash = value
+	}
 	if overrides.publicConverter != nil {
 		cfg.Service.PublicConverter = *overrides.publicConverter
 	}
@@ -454,7 +495,10 @@ func validateServeSecurity(cfg model.Config) error {
 		token = strings.TrimSpace(cfg.Service.SubscriptionToken)
 	}
 	if token == "" {
-		return fmt.Errorf("SUBCONV_ACCESS_TOKEN is required for a non-loopback listener; set SUBCONV_ALLOW_INSECURE_PUBLIC=true only for an explicitly insecure local preview")
+		if cfg.Service.ManagementPasswordHash != "" && authn.ValidateHash(cfg.Service.ManagementPasswordHash) == nil {
+			return nil
+		}
+		return fmt.Errorf("a management password hash or SUBCONV_ACCESS_TOKEN is required for a non-loopback listener; set SUBCONV_ALLOW_INSECURE_PUBLIC=true only for an explicitly insecure local preview")
 	}
 	if token != "" && len(token) < 24 {
 		return fmt.Errorf("SUBCONV_ACCESS_TOKEN must contain at least 24 characters for a non-loopback listener")

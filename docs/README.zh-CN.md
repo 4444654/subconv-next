@@ -58,7 +58,7 @@ curl -fL --retry 2 https://raw.githubusercontent.com/4444654/subconv-next/main/s
 
 缺少 curl 时先执行 `apt-get update && apt-get install -y curl ca-certificates`。安装器自动补齐依赖、生成 `scn` 管理菜单、校验发布包；下载不可用时自动安装 Go 并从本仓库源码编译。安装成功后启用开机自启，更新失败恢复原程序与设置。
 
-以后输入 `scn` 打开中文菜单。默认仅监听 `127.0.0.1:9876`；可通过已有 Caddy 反代访问，或执行 `scn bind public` 并放行端口后使用 `http://服务器IP:9876/`。输入 `scn token` 查看登录 Token。完整说明见 [原生安装与故障排查](native-install.md)。
+以后输入 `scn` 打开中文菜单。默认仅监听 `127.0.0.1:9876`；可通过已有 Caddy 反代访问，或执行 `scn bind public` 并放行端口后使用 `http://服务器IP:9876/`。网页登录默认账号 `admin`，初始密码通过 `scn token` 查看；输入 `scn account` 设置自己的账号和独立密码，保留 API Token 与订阅。已安装旧版时重新执行上方安装命令升级程序和管理器。完整说明见 [原生安装与故障排查](native-install.md)。
 
 ### Docker Compose
 

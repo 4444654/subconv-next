@@ -59,9 +59,9 @@ prepare_binary() {
     def tearDown(self):
         self.tmp.cleanup()
 
-    def run_shell(self, body, expected=0):
+    def run_shell(self, body, expected=0, input=None):
         code = f'source "{self.script}"\n' + self.overrides + "\n" + body
-        result = subprocess.run(["bash", "-c", code], env=self.env, text=True,
+        result = subprocess.run(["bash", "-c", code], env=self.env, text=True, input=input,
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         if expected == 0:
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -84,11 +84,11 @@ prepare_binary() {
         result = subprocess.run(["bash", str(self.manager)], input="0\n", env=self.env,
                                 text=True, capture_output=True)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("管理 v1.2.0", result.stdout)
+        self.assertIn("管理 v1.3.0", result.stdout)
         result = subprocess.run(["bash", str(self.manager)], input="bad\n\n0\n",
                                 env=self.env, text=True, capture_output=True)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertGreaterEqual(result.stdout.count("管理 v1.2.0"), 2)
+        self.assertGreaterEqual(result.stdout.count("管理 v1.3.0"), 2)
 
     def test_stream_execution_saves_manager_even_if_download_fails(self):
         source = self.script.read_text()
@@ -156,6 +156,46 @@ prepare_binary() {
         self.assertFalse(marker.exists())
         self.run_shell('env_set SUBCONV_PUBLIC_BASE_URL "https://example.com/a?x=1&y=2"')
         self.assertIn("SUBCONV_PUBLIC_BASE_URL=https://example.com/a?x=1&y=2", self.env_file.read_text())
+
+    def prepare_account_binary(self):
+        hashed = "$2a$10$" + "A" * 53
+        self.binary.write_text("#!/usr/bin/env bash\n"
+                               'test "$1" = hash-password || exit 2\n'
+                               'cat > "$SCN_TEST_ROOT/password-stdin"\n'
+                               f"printf '%s\\n' '{hashed}'\n")
+        return hashed
+
+    def test_account_password_is_hashed_and_token_is_preserved(self):
+        self.install()
+        hashed = self.prepare_account_binary()
+        original_token = next(line for line in self.env_file.read_text().splitlines()
+                              if line.startswith("SUBCONV_ACCESS_TOKEN="))
+        password = "  passphrase $ with spaces!  "
+        result = self.run_shell("main account", input=f"operator\n{password}\n{password}\n")
+        contents = self.env_file.read_text()
+        self.assertIn("SUBCONV_MANAGEMENT_USERNAME=operator", contents)
+        self.assertIn("SUBCONV_MANAGEMENT_PASSWORD_HASH=" + hashed, contents)
+        self.assertIn(original_token, contents)
+        self.assertNotIn(password, contents + result.stdout + result.stderr)
+        self.assertEqual((self.root / "password-stdin").read_text(), password)
+        original_env = self.env_file.read_bytes()
+        self.run_shell("main update")
+        self.assertEqual(self.env_file.read_bytes(), original_env)
+
+    def test_failed_account_change_restores_previous_settings(self):
+        self.install()
+        self.prepare_account_binary()
+        original = self.env_file.read_bytes()
+        (self.root / "fail-health").touch()
+        self.run_shell("main account", expected=1, input="operator\npassphrase123\npassphrase123\n")
+        self.assertEqual(self.env_file.read_bytes(), original)
+        self.assertTrue((self.root / "active").exists())
+
+    def test_mismatched_account_passwords_do_not_change_settings(self):
+        self.install()
+        original = self.env_file.read_bytes()
+        self.run_shell("main account", expected=1, input="operator\npassphrase123\notherpass123\n")
+        self.assertEqual(self.env_file.read_bytes(), original)
 
 
 if __name__ == "__main__":

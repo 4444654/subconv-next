@@ -6,7 +6,7 @@ SubConv Next is a self-hosted subscription converter. It does not provide a publ
 
 - Default development configuration binds the service to `127.0.0.1`.
 - The provided `docker-compose.yml` publishes port `9876` on `127.0.0.1` by default, mounts `/config` read-only, drops Linux capabilities, and uses a read-only root filesystem. A network-disabled one-shot helper prepares the bind-mounted data directory for the unprivileged UID before startup.
-- A configured `SUBCONV_ACCESS_TOKEN` protects the management interface on both private and public peers. The Web UI exchanges it at `/login` for a 12-hour signed HttpOnly, SameSite session cookie; unsafe browser requests require a session-bound CSRF token. API clients may send a Bearer token, proactive HTTP Basic credentials, or `X-SubConv-Access-Token`. Tokens in URL query parameters are rejected.
+- The Web UI requires a username and password at `/login` and creates a 12-hour signed HttpOnly, SameSite session cookie; unsafe browser requests require a session-bound CSRF token. The initial username is `admin` and the initial password is the existing `SUBCONV_ACCESS_TOKEN`. Set `SUBCONV_MANAGEMENT_USERNAME` and `SUBCONV_MANAGEMENT_PASSWORD_HASH` (or use `scn account` in native installs) to use an independent bcrypt-hashed web password. Credential changes invalidate existing sessions. API clients continue to use the independent API token through Bearer, proactive HTTP Basic, or `X-SubConv-Access-Token` authentication. Tokens in URL query parameters are rejected.
 - `SUBCONV_PUBLIC_CONVERTER=true` exposes the converter UI and an explicit converter-route allowlist without login. Stateful requests require a cryptographically random workspace capability, publication management requires the owning workspace capability, and anonymous requests receive separate workspace, expensive-operation, and general rate limits.
 - Public workspaces cannot enable private-network subscription fetching or disable TLS certificate verification, even if a browser submits `allow_lan` or `insecure_skip_verify`; idle anonymous workspaces are capped at six hours and stale published links are cleaned after 30 days without access.
 - If the system resolver returns only a Fake-IP or another reserved address, public mode retries through public DNS resolvers and accepts only validated public addresses. The selected address remains pinned for the request, including after redirects.
@@ -16,7 +16,7 @@ SubConv Next is a self-hosted subscription converter. It does not provide a publ
 - A published `/s/{token}/...` URL can only download rendered YAML. It cannot restore editable source configuration in public mode. Browser-local drafts use a separate random `publish_id` capability when rebinding an existing publication.
 - `SUBCONV_TRUST_PROXY_HEADERS=true` is safe only when the backend is reachable exclusively through a trusted proxy that rewrites forwarding headers. Otherwise clients can spoof their rate-limit identity.
 - `SUBCONV_ALLOW_INSECURE_PUBLIC=true` is an explicit passwordless preview override. It exposes every management operation to reachable clients and is not a production security boundary.
-- A non-loopback listener requires a management token of at least 24 characters at startup. Private-network and Docker bridge source addresses do not bypass authentication. A tokenless non-loopback preview requires the explicit `SUBCONV_ALLOW_INSECURE_PUBLIC=true` override and must remain local-only.
+- A non-loopback listener requires a valid bcrypt web password hash or a management token of at least 24 characters at startup. If an API token is configured, it must meet the same minimum even alongside an independent password. Private-network and Docker bridge source addresses do not bypass authentication. A credentialless non-loopback preview requires the explicit `SUBCONV_ALLOW_INSECURE_PUBLIC=true` override and must remain local-only.
 - Put public deployments behind a TLS reverse proxy or VPN and do not expose the backend port directly. A reverse proxy must preserve the incoming `Authorization` header.
 - `/healthz` is intentionally unauthenticated and returns only basic service health.
 
@@ -61,7 +61,7 @@ Restoring a draft creates a new workspace. If the saved `publish_id` still exist
 
 The following API surfaces must not expose secrets by default:
 
-- `/api/config` redacts access tokens and subscription URL query values.
+- `/api/config` redacts access tokens and subscription URL query values and omits web password hashes. Daemon account credentials are excluded from editable workspace configurations.
 - Public `/api/config`, `/api/status`, and refresh responses omit server filesystem paths and listener details. Nested rule/template/DNS URLs and sensitive rule-provider headers are redacted in configuration responses.
 - `/api/nodes` and node detail responses mask password, uuid, private key, and pre-shared key fields.
 - `/api/logs` returns masked log lines.

@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"subconv-next/internal/authn"
 )
 
 const (
@@ -29,6 +31,7 @@ const (
 )
 
 type authLoginRequest struct {
+	Username string `json:"username"`
 	Password string `json:"password"`
 }
 
@@ -55,7 +58,7 @@ func (s *Server) managementLoginRequired(r *http.Request) bool {
 	if s.snapshotConfig().Service.AllowInsecurePublic {
 		return false
 	}
-	if s.expectedAccessToken() != "" {
+	if s.managementLoginConfigured() {
 		return true
 	}
 	if !s.publiclyBound() {
@@ -70,10 +73,7 @@ func (s *Server) managementAuthorization(r *http.Request) managementAuthKind {
 	}
 
 	expected := s.expectedAccessToken()
-	if expected == "" {
-		return managementAuthNone
-	}
-	if provided := requestAccessToken(r); provided != "" && constantTimeEqual(provided, expected) {
+	if provided := requestAccessToken(r); expected != "" && provided != "" && constantTimeEqual(provided, expected) {
 		return managementAuthToken
 	}
 	if _, _, ok := s.managementSession(r); ok {
@@ -98,7 +98,7 @@ func (s *Server) handleAuthSession(w http.ResponseWriter, r *http.Request) {
 	response := authSessionResponse{
 		OK:              true,
 		Required:        required,
-		Configured:      !publicConverter && s.expectedAccessToken() != "",
+		Configured:      !publicConverter && s.managementLoginConfigured(),
 		Authenticated:   publicConverter || !required || authKind != managementAuthNone,
 		PublicConverter: publicConverter,
 	}
@@ -121,9 +121,8 @@ func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	expected := s.expectedAccessToken()
-	if expected == "" {
-		writeAPIError(w, http.StatusServiceUnavailable, "LOGIN_NOT_CONFIGURED", "management password is not configured")
+	if !s.managementLoginConfigured() {
+		writeAPIError(w, http.StatusServiceUnavailable, "LOGIN_NOT_CONFIGURED", "management account is not configured")
 		return
 	}
 
@@ -132,9 +131,9 @@ func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
 		return
 	}
-	if !constantTimeEqual(strings.TrimSpace(req.Password), expected) {
+	if !s.validManagementCredentials(req.Username, req.Password) {
 		s.appendLog("management login rejected from " + s.clientHost(r))
-		writeAPIError(w, http.StatusUnauthorized, "INVALID_CREDENTIALS", "management password is incorrect")
+		writeAPIError(w, http.StatusUnauthorized, "INVALID_CREDENTIALS", "username or password is incorrect")
 		return
 	}
 
@@ -224,9 +223,39 @@ func (s *Server) managementSession(r *http.Request) (string, time.Time, bool) {
 }
 
 func (s *Server) managementSignature(value string) string {
-	mac := hmac.New(sha256.New, []byte(s.expectedAccessToken()))
+	service := s.snapshotConfig().Service
+	// Changing the account invalidates old sessions without rotating API tokens
+	// or published subscription links. Keep credentials out of the cookie.
+	key := sha256.Sum256([]byte(s.expectedAccessToken() + "\x00" + s.managementUsername() + "\x00" + service.ManagementPasswordHash))
+	mac := hmac.New(sha256.New, key[:])
 	_, _ = mac.Write([]byte(value))
 	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+}
+
+func (s *Server) managementUsername() string {
+	if username := strings.TrimSpace(s.snapshotConfig().Service.ManagementUsername); username != "" {
+		return username
+	}
+	return authn.DefaultUsername
+}
+
+func (s *Server) managementLoginConfigured() bool {
+	return s.snapshotConfig().Service.ManagementPasswordHash != "" || s.expectedAccessToken() != ""
+}
+
+func (s *Server) validManagementCredentials(username, password string) bool {
+	service := s.snapshotConfig().Service
+	usernameOK := constantTimeEqual(strings.TrimSpace(username), s.managementUsername())
+	var passwordOK bool
+	if service.ManagementPasswordHash != "" {
+		passwordOK = authn.VerifyPassword(service.ManagementPasswordHash, password)
+	} else {
+		// Existing installations use their original token until scn account
+		// sets an independent web password. Username is always required.
+		expected := s.expectedAccessToken()
+		passwordOK = expected != "" && constantTimeEqual(strings.TrimSpace(password), expected)
+	}
+	return usernameOK && passwordOK
 }
 
 func (s *Server) managementCSRFToken(sessionValue string) string {

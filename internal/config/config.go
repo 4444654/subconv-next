@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"subconv-next/internal/authn"
 	"subconv-next/internal/model"
 )
 
@@ -27,6 +28,8 @@ func Load(path string) (model.Config, error) {
 }
 
 func normalizeConfig(cfg model.Config) model.Config {
+	cfg.Service.ManagementUsername = strings.TrimSpace(cfg.Service.ManagementUsername)
+	cfg.Service.ManagementPasswordHash = strings.TrimSpace(cfg.Service.ManagementPasswordHash)
 	cfg.Service.AccessToken = strings.TrimSpace(cfg.Service.AccessToken)
 	cfg.Service.SubscriptionToken = strings.TrimSpace(cfg.Service.SubscriptionToken)
 	if cfg.Service.AccessToken == "" && cfg.Service.SubscriptionToken != "" {
@@ -276,6 +279,14 @@ func stringSlicesEqual(a, b []string) bool {
 }
 
 func Validate(cfg model.Config) error {
+	if cfg.Service.ManagementUsername != "" && !authn.ValidUsername(cfg.Service.ManagementUsername) {
+		return fmt.Errorf("service.management_username must contain 1–64 letters, digits, _, ., @ or -")
+	}
+	if cfg.Service.ManagementPasswordHash != "" {
+		if err := authn.ValidateHash(cfg.Service.ManagementPasswordHash); err != nil {
+			return fmt.Errorf("service.management_password_hash: %w", err)
+		}
+	}
 	if strings.TrimSpace(cfg.Service.ListenAddr) == "" {
 		return fmt.Errorf("service.listen_addr must not be empty")
 	}

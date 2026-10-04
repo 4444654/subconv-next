@@ -54,7 +54,9 @@ subconv-next generate
 | `SUBCONV_DATA_DIR` | `/data` | Runtime data directory. |
 | `SUBCONV_PUBLIC_BASE_URL` | empty | Public origin used in generated subscription links. |
 | `SUBCONV_LOG_LEVEL` | `info` | Service and renderer log level. |
-| `SUBCONV_ACCESS_TOKEN` | empty | Management password and API token. Required and at least 24 characters on every non-loopback listener, including the default Docker listener. |
+| `SUBCONV_ACCESS_TOKEN` | empty | API token and initial web password until an independent password is configured. If set on a non-loopback listener, it must contain at least 24 characters. |
+| `SUBCONV_MANAGEMENT_USERNAME` | `admin` | Web login username; 1–64 letters, digits, `_`, `.`, `@` or `-`. |
+| `SUBCONV_MANAGEMENT_PASSWORD_HASH` | empty | Independent bcrypt web password hash, cost 10–14. When set, the API token cannot be used as the web password. |
 | `SUBCONV_PUBLIC_CONVERTER` | `false` | Allow anonymous access to the workspace-isolated converter UI and approved converter APIs. |
 | `SUBCONV_TRUST_PROXY_HEADERS` | `false` | Trust proxy-provided client IP headers for in-process rate limits; only use behind a private trusted proxy. |
 | `SUBCONV_ALLOW_INSECURE_PUBLIC` | `false` | Explicitly disable management authentication. Preview use only. |
@@ -71,6 +73,14 @@ SUBCONV_ACCESS_TOKEN=replace-with-a-long-random-token \
 SUBCONV_PUBLIC_CONVERTER=true \
 subconv-next serve --config /config/config.json
 ```
+
+## Web Login
+
+The account-enabled binary requires both a username and password at `/login`. Old installations initially use `admin` and their existing API token as the password. For native installs, `scn account` sets an independent username and password with hidden input. Re-run the current installer first when upgrading older native installations; upstream images and binaries may not include this fork's account login feature.
+
+For other process managers, read the password from standard input with `subconv-next hash-password`; the command expects 8–72 bytes with no trailing newline. Store its output in `SUBCONV_MANAGEMENT_PASSWORD_HASH` (quote the value when assigning it in a shell because bcrypt hashes contain `$`). The corresponding JSON/UCI service fields are `management_username` and `management_password_hash`. Never commit real credentials or hashes. A non-loopback listener requires a valid password hash or a strong API token; any configured API token must still meet the 24-character minimum.
+
+Only hashes are stored for independent passwords. Changing the username, password hash, or API token invalidates existing management sessions. The browser session duration remains 12 hours. API token authentication and published subscription links remain independent of the web password. Account fields are excluded from workspace configuration and password hashes are omitted from API responses.
 
 ## Data Directory
 

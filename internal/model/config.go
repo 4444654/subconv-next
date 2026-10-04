@@ -51,6 +51,8 @@ type ServiceConfig struct {
 	PublicBaseURL                    string `json:"public_base_url,omitempty"`
 	AccessToken                      string `json:"access_token,omitempty"`
 	SubscriptionToken                string `json:"subscription_token,omitempty"`
+	ManagementUsername               string `json:"management_username,omitempty"`
+	ManagementPasswordHash           string `json:"management_password_hash,omitempty"`
 	PublicConverter                  bool   `json:"public_converter,omitempty"`
 	TrustProxyHeaders                bool   `json:"trust_proxy_headers,omitempty"`
 	AllowInsecurePublic              bool   `json:"allow_insecure_public,omitempty"`

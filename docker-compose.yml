@@ -30,6 +30,9 @@ services:
       # Required because the process listens on 0.0.0.0 inside the container.
       # It is read at startup and is never written back to mounted config.
       SUBCONV_ACCESS_TOKEN: ${SUBCONV_ACCESS_TOKEN:-}
+      # Available in this fork's account-enabled binary (build the local image).
+      SUBCONV_MANAGEMENT_USERNAME: ${SUBCONV_MANAGEMENT_USERNAME:-admin}
+      SUBCONV_MANAGEMENT_PASSWORD_HASH: ${SUBCONV_MANAGEMENT_PASSWORD_HASH:-}
       # Public converter mode keeps random workspace isolation and rate limits
       # while removing login from the normal browser workflow.
       SUBCONV_PUBLIC_CONVERTER: ${SUBCONV_PUBLIC_CONVERTER:-false}

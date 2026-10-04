@@ -1,4 +1,5 @@
 const form = document.getElementById("login-form");
+const usernameInput = document.getElementById("username");
 const passwordInput = document.getElementById("password");
 const submitButton = document.getElementById("login-submit");
 const toggleButton = document.getElementById("toggle-password");
@@ -20,11 +21,12 @@ async function initializeLogin() {
       return;
     }
     if (!session.configured) {
-      setMessage("服务尚未配置管理密码，当前公网访问已被阻止。", true);
+      setMessage("服务尚未配置管理账号，请联系管理员。", true);
       return;
     }
     setFormEnabled(true);
-    passwordInput.focus();
+    if (usernameInput.value.trim()) passwordInput.focus();
+    else usernameInput.focus();
   } catch (_error) {
     setMessage("无法连接管理服务，请稍后重试。", true);
   }
@@ -32,9 +34,15 @@ async function initializeLogin() {
 
 async function handleLogin(event) {
   event.preventDefault();
-  const password = passwordInput.value.trim();
+  const username = usernameInput.value.trim();
+  const password = passwordInput.value;
+  if (!username) {
+    setMessage("请输入账号。", true);
+    usernameInput.focus();
+    return;
+  }
   if (!password) {
-    setMessage("请输入管理密码。", true);
+    setMessage("请输入密码。", true);
     passwordInput.focus();
     return;
   }
@@ -49,7 +57,7 @@ async function handleLogin(event) {
         Accept: "application/json",
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ password }),
+      body: JSON.stringify({ username, password }),
     });
     const payload = await response.json();
     if (!response.ok || !payload.authenticated) {
@@ -57,7 +65,7 @@ async function handleLogin(event) {
         response.status === 429
           ? "尝试次数过多，请一分钟后再试。"
           : response.status === 401
-            ? "管理密码不正确。"
+            ? "账号或密码不正确。"
             : payload?.error?.message || "登录失败，请稍后重试。";
       setMessage(text, true);
       passwordInput.select();
@@ -94,12 +102,14 @@ function safeNextPath() {
 }
 
 function setFormEnabled(enabled) {
+  usernameInput.disabled = !enabled;
   passwordInput.disabled = !enabled;
   submitButton.disabled = !enabled;
   toggleButton.disabled = !enabled;
 }
 
 function setBusy(busy) {
+  usernameInput.disabled = busy;
   passwordInput.disabled = busy;
   submitButton.disabled = busy;
   toggleButton.disabled = busy;

@@ -36,6 +36,7 @@ func RedactSecret(s string) string {
 func RedactConfig(cfg model.Config) model.Config {
 	cfg.Service.AccessToken = RedactSecret(cfg.Service.AccessToken)
 	cfg.Service.SubscriptionToken = RedactSecret(cfg.Service.SubscriptionToken)
+	cfg.Service.ManagementPasswordHash = ""
 	for i := range cfg.Subscriptions {
 		cfg.Subscriptions[i].URL = RedactURL(cfg.Subscriptions[i].URL)
 		cfg.Subscriptions[i].SourceLogo = RedactURL(cfg.Subscriptions[i].SourceLogo)
