@@ -2,7 +2,7 @@
 # SubConv Next 原生安装与管理；Debian / Ubuntu amd64 / arm64，无需 Docker。
 set -Eeuo pipefail
 
-SCRIPT_VERSION="1.4.0"
+SCRIPT_VERSION="1.4.1"
 SOURCE_REPO="4444654/subconv-next"
 UPSTREAM_REPO="Earl9/subconv-next"
 BIN="/usr/local/bin/subconv-next"
@@ -473,6 +473,32 @@ uninstall_app() {
   info "已卸载。配置、数据和系统用户已保留，重新安装可继续使用。"
 }
 
+registration_status() {
+  local value
+  if [[ ! -f "$ENV_FILE" ]]; then printf '未安装'; return; fi
+  value=$(env_get SUBCONV_REGISTRATION_ENABLED)
+  if [[ -z "$value" && -s "$CONFIG_JSON" ]]; then
+    value=$(jq -r 'if .service.registration_enabled == false then "false" else "true" end' "$CONFIG_JSON")
+  fi
+  case "${value,,}" in false|0|f) printf '已关闭' ;; *) printf '已开启' ;; esac
+}
+
+registration_menu() {
+  local choice
+  need_install
+  printf '\n  当前注册开关：%s\n' "$(registration_status)"
+  printf '   1. 开启注册\n'
+  printf '   2. 关闭注册（已有账号仍可登录）\n'
+  printf '   0. 返回主菜单\n\n'
+  read -r -p '请选择 [0-2]：' choice || return 0
+  case "$choice" in
+    1) main registration on ;;
+    2) main registration off ;;
+    0) return 0 ;;
+    *) warn "无效选择，注册设置未修改。" ;;
+  esac
+}
+
 menu_action() {
   local choice=$1 value
   case "$choice" in
@@ -490,6 +516,7 @@ menu_action() {
     12) main update ;;
     13) main repair ;;
     14) main uninstall ;;
+    15) registration_menu ;;
     *) warn "无效选择。" ;;
   esac
 }
@@ -516,8 +543,10 @@ menu() {
     printf '  12. 安装 / 更新程序\n'
     printf '  13. 修复服务\n'
     printf '  14. 卸载程序\n\n'
+    printf '  注册管理\n'
+    printf '  15. 开启 / 关闭注册（%s）\n\n' "$(registration_status)"
     printf '   0. 退出菜单\n\n'
-    read -r -p '请输入选项 [0-14]：' choice || return 0
+    read -r -p '请输入选项 [0-15]：' choice || return 0
     [[ "$choice" != 0 ]] || return 0
     # 每次操作使用独立进程，失败或中断日志不会退出整个菜单。
     bash "$MANAGER" _menu_action "$choice" || warn "操作未完成，可查看提示后重试。"

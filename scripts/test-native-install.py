@@ -84,11 +84,11 @@ prepare_binary() {
         result = subprocess.run(["bash", str(self.manager)], input="0\n", env=self.env,
                                 text=True, capture_output=True)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("管理 v1.4.0", result.stdout)
+        self.assertIn("管理 v1.4.1", result.stdout)
         result = subprocess.run(["bash", str(self.manager)], input="bad\n\n0\n",
                                 env=self.env, text=True, capture_output=True)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertGreaterEqual(result.stdout.count("管理 v1.4.0"), 2)
+        self.assertGreaterEqual(result.stdout.count("管理 v1.4.1"), 2)
 
     def test_stream_execution_saves_manager_even_if_download_fails(self):
         source = self.script.read_text()
@@ -173,6 +173,36 @@ prepare_binary() {
         (self.root / "fail-health").touch()
         self.run_shell("main registration on", expected=1)
         self.assertEqual(self.env_file.read_bytes(), disabled)
+
+    def test_registration_menu_changes_setting_and_refreshes_status(self):
+        self.install()
+        settings = [line for line in self.env_file.read_text().splitlines()
+                    if not line.startswith("SUBCONV_REGISTRATION_ENABLED=")]
+        for selection, enabled, status in (("2", "false", "已关闭"),
+                                            ("1", "true", "已开启")):
+            result = subprocess.run(["bash", str(self.manager)],
+                                    input=f"15\n{selection}\n\n0\n", env=self.env,
+                                    text=True, capture_output=True)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("当前注册开关", result.stdout)
+            self.assertIn(f"15. 开启 / 关闭注册（{status}）", result.stdout)
+            self.assertIn(f"SUBCONV_REGISTRATION_ENABLED={enabled}\n",
+                          self.env_file.read_text())
+            self.assertEqual(settings, [line for line in self.env_file.read_text().splitlines()
+                                       if not line.startswith("SUBCONV_REGISTRATION_ENABLED=")])
+        original = self.env_file.read_bytes()
+        for selection in ("0", "bad"):
+            result = subprocess.run(["bash", str(self.manager)],
+                                    input=f"15\n{selection}\n\n0\n", env=self.env,
+                                    text=True, capture_output=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(self.env_file.read_bytes(), original)
+        self.env_file.write_text("\n".join(settings) + "\n")
+        self.config.write_text('{"service":{"registration_enabled":false}}\n')
+        result = subprocess.run(["bash", str(self.manager)], input="0\n", env=self.env,
+                                text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("15. 开启 / 关闭注册（已关闭）", result.stdout)
 
     def test_proxy_url_change_preserves_credentials_and_rolls_back_on_failure(self):
         self.install()

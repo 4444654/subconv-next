@@ -38,7 +38,7 @@ scn
 
 `scn` 是安装器生成的程序，不需要另装“命令执行工具”。下载中断后也可以使用 `scn install` 重试。若安装器尚未开始运行、管理器也未生成，重新执行上面的安装命令。
 
-菜单按“服务管理、账号管理、访问设置、安装维护”分组，每个选项单独一行，编号 1–14，输入 0 退出。仅刷新已有安装的菜单时，下载当前脚本并运行 `menu-update`：
+菜单按“服务管理、账号管理、访问设置、安装维护、注册管理”分组，每个选项单独一行，编号 1–15，输入 0 退出。仅刷新已有安装的菜单时，下载当前脚本并运行 `menu-update`：
 
 ```bash
 curl -fL --retry 2 https://raw.githubusercontent.com/4444654/subconv-next/main/subconv-next-onekey.sh -o /tmp/subconv-next-onekey.sh && bash /tmp/subconv-next-onekey.sh menu-update
@@ -85,7 +85,7 @@ scn account
 
 注册用户的工作区、发布订阅和浏览器草稿按账号隔离；普通账号不能读取管理员或其他用户的配置，也不能启用私有网络抓取、跳过 TLS 验证或改动服务账号。账号保存在 `/var/lib/subconv-next/accounts.json`，密码为 bcrypt 哈希，文件权限为 `0600`；更新、重启和卸载保留此文件。
 
-默认开放注册（最多 256 个账号）。可用 `scn registration off` 关闭注册入口和接口，已注册账号仍可登录；用 `scn registration on` 重新开放。匿名公开转换模式不显示注册入口。详情见 [注册与用户隔离](registration.md)。
+默认开放注册（最多 256 个账号）。打开 `scn` 菜单，选择 **15. 开启 / 关闭注册**，再选择 **1** 开启或 **2** 关闭；主菜单同时显示当前注册开关状态。也可用 `scn registration off` 关闭注册入口和接口，已注册账号仍可登录；用 `scn registration on` 重新开放。匿名公开转换模式不显示注册入口。详情见 [注册与用户隔离](registration.md)。
 
 | 命令 | 功能 |
 | --- | --- |
@@ -139,4 +139,4 @@ bash -n subconv-next-onekey.sh
 python3 scripts/test-native-install.py
 ```
 
-覆盖首次安装、流式执行下载失败后管理器仍可用、菜单重复打开、更新保留配置及数据、失败恢复、端口校验、环境文件不被当作 Shell 执行、独立账号设置、Token 保留及账号修改失败恢复。
+覆盖首次安装、流式执行下载失败后管理器仍可用、菜单重复打开、菜单注册开关及状态刷新、更新保留配置及数据、失败恢复、端口校验、环境文件不被当作 Shell 执行、独立账号设置、Token 保留及账号修改失败恢复。

@@ -12,7 +12,7 @@
 curl -fL --retry 2 https://raw.githubusercontent.com/4444654/subconv-next/main/subconv-next-onekey.sh -o /tmp/subconv-next-onekey.sh && bash /tmp/subconv-next-onekey.sh update
 ```
 
-升级完成后刷新浏览器页面。默认开放注册；服务器管理命令：
+升级完成后刷新浏览器页面。默认开放注册；输入 `scn`，选择 **15. 开启 / 关闭注册**，然后选择 **1** 开启或 **2** 关闭。菜单会显示当前注册开关状态。也可直接使用服务器管理命令：
 
 ```bash
 scn registration off
