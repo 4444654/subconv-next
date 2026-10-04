@@ -207,7 +207,7 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 		OK:            true,
 		UptimeSeconds: s.uptimeSeconds(),
 	}
-	if !s.restrictedRequest(r) && (!s.publiclyBound() || s.authorizeManagementRequest(r)) {
+	if !s.restrictedRequest(r) && s.authorizeManagementRequest(r) {
 		response.Version = s.version
 		response.DataDir = s.baseDataDir()
 	}

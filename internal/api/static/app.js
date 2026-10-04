@@ -7988,13 +7988,27 @@ async function logoutManagementSession() {
   const button = document.getElementById("logout-btn");
   if (button) button.disabled = true;
   try {
-    await fetch("/api/auth/logout", {
+    const response = await fetch("/api/auth/logout", {
       method: "POST",
       credentials: "same-origin",
       headers: state.csrfToken ? { "X-SubConv-CSRF": state.csrfToken } : {},
     });
-  } finally {
+    if (response.status === 401) {
+      window.location.replace("/login");
+      return;
+    }
+    const payload = await response.json();
+    if (!response.ok || !payload?.ok) {
+      showToast(response.status === 403
+        ? "退出登录未成功，请刷新页面后重试。"
+        : "退出登录失败，请稍后重试。", true);
+      return;
+    }
     window.location.replace("/login");
+  } catch (_error) {
+    showToast("退出登录失败，请检查网络后重试。", true);
+  } finally {
+    if (button) button.disabled = false;
   }
 }
 

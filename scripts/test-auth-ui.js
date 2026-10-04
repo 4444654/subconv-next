@@ -114,7 +114,41 @@ async function run() {
   });
   vm.runInContext(startup, startupContext);
   assert.deepEqual(startupCalls, ["auth-init"], "shared drafts must not render or accept actions before authentication");
-  process.stdout.write("Auth UI checks passed: signup, login, validation, closed registration, origin errors, account draft isolation and failed session loading.\n");
+
+  const logoutFunction = app.match(/async function logoutManagementSession\(\) \{[\s\S]*?\n\}/)[0];
+  for (const scenario of [
+    { name: "success", status: 200, payload: { ok: true }, redirect: true },
+    { name: "expired session", status: 401, redirect: true },
+    { name: "CSRF failure", status: 403, redirect: false },
+    { name: "server failure", status: 500, redirect: false },
+    { name: "failed response body", status: 200, payload: { ok: false }, redirect: false },
+    { name: "network failure", networkError: true, redirect: false },
+  ]) {
+    const button = { disabled: false };
+    const messages = [];
+    let destination = "";
+    const context = vm.createContext({
+      state: { csrfToken: "logout-csrf" },
+      document: { getElementById: () => button },
+      window: { location: { replace(value) { destination = value; } } },
+      showToast(message) { messages.push(message); },
+      fetch: async (url, options) => {
+        assert.equal(url, "/api/auth/logout");
+        assert.equal(options.method, "POST");
+        assert.equal(options.credentials, "same-origin");
+        assert.equal(options.headers["X-SubConv-CSRF"], "logout-csrf");
+        if (scenario.networkError) throw new Error("offline");
+        return { ok: scenario.status === 200, status: scenario.status,
+          json: async () => scenario.payload || { error: { code: "FAILED" } } };
+      },
+    });
+    vm.runInContext(logoutFunction, context);
+    await vm.runInContext("logoutManagementSession()", context);
+    assert.equal(destination, scenario.redirect ? "/login" : "", scenario.name);
+    assert.equal(messages.length, scenario.redirect ? 0 : 1, scenario.name);
+    assert.equal(button.disabled, false, "logout must remain usable after a failed request");
+  }
+  process.stdout.write("Auth UI checks passed: signup, login, validation, closed registration, origin errors, account draft isolation, failed session loading and logout failures.\n");
 }
 
 run().catch(error => { process.stderr.write(`${error.stack}\n`); process.exitCode = 1; });

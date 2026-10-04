@@ -774,28 +774,32 @@ func TestPublicHealthDoesNotExposeRuntimePaths(t *testing.T) {
 	}
 }
 
-func TestPublicManagementHealthRequiresAuthorizationForRuntimeDetails(t *testing.T) {
-	cfg := model.DefaultConfig()
-	cfg.Service.ListenAddr = "0.0.0.0"
-	cfg.Service.AccessToken = "a-strong-management-token"
-	server, _ := newTestServer(t, cfg)
+func TestManagementHealthRequiresAuthorizationForRuntimeDetails(t *testing.T) {
+	for _, listenAddr := range []string{"0.0.0.0", "127.0.0.1", "localhost", "::1"} {
+		t.Run(listenAddr, func(t *testing.T) {
+			cfg := model.DefaultConfig()
+			cfg.Service.ListenAddr = listenAddr
+			cfg.Service.AccessToken = "a-strong-management-token"
+			server, _ := newTestServer(t, cfg)
 
-	request := httptest.NewRequest(http.MethodGet, "/healthz", nil)
-	recorder := httptest.NewRecorder()
-	server.Handler().ServeHTTP(recorder, request)
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("anonymous health status = %d", recorder.Code)
-	}
-	if body := recorder.Body.String(); strings.Contains(body, "data_dir") || strings.Contains(body, "version") {
-		t.Fatalf("anonymous public health leaked runtime metadata: %s", body)
-	}
+			request := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+			recorder := httptest.NewRecorder()
+			server.Handler().ServeHTTP(recorder, request)
+			if recorder.Code != http.StatusOK {
+				t.Fatalf("anonymous health status = %d", recorder.Code)
+			}
+			if body := recorder.Body.String(); strings.Contains(body, "data_dir") || strings.Contains(body, "version") {
+				t.Fatalf("anonymous health leaked runtime metadata: %s", body)
+			}
 
-	authorizedRequest := httptest.NewRequest(http.MethodGet, "/healthz", nil)
-	authorizedRequest.Header.Set("Authorization", "Bearer a-strong-management-token")
-	authorizedRecorder := httptest.NewRecorder()
-	server.Handler().ServeHTTP(authorizedRecorder, authorizedRequest)
-	if body := authorizedRecorder.Body.String(); !strings.Contains(body, "data_dir") || !strings.Contains(body, "version") {
-		t.Fatalf("authorized health omitted runtime metadata: %s", body)
+			authorizedRequest := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+			authorizedRequest.Header.Set("Authorization", "Bearer a-strong-management-token")
+			authorizedRecorder := httptest.NewRecorder()
+			server.Handler().ServeHTTP(authorizedRecorder, authorizedRequest)
+			if body := authorizedRecorder.Body.String(); !strings.Contains(body, "data_dir") || !strings.Contains(body, "version") {
+				t.Fatalf("authorized health omitted runtime metadata: %s", body)
+			}
+		})
 	}
 }
 
