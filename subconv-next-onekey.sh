@@ -2,9 +2,8 @@
 # SubConv Next 原生安装与管理；Debian / Ubuntu amd64 / arm64，无需 Docker。
 set -Eeuo pipefail
 
-SCRIPT_VERSION="1.4.1"
+SCRIPT_VERSION="1.5.0"
 SOURCE_REPO="4444654/subconv-next"
-UPSTREAM_REPO="Earl9/subconv-next"
 BIN="/usr/local/bin/subconv-next"
 MANAGER="/usr/local/bin/scn"
 CONF_DIR="/etc/subconv-next"
@@ -84,7 +83,7 @@ write_manager() {
   tmp=$(mktemp "${MANAGER}.XXXXXX")
   {
     printf '#!/usr/bin/env bash\nset -Eeuo pipefail\nSCN_MANAGER_MODE=1\n'
-    for name in SCRIPT_VERSION SOURCE_REPO UPSTREAM_REPO BIN MANAGER CONF_DIR ENV_FILE CONFIG_JSON DATA_DIR SERVICE UNIT_FILE RUN_USER GO_DIR; do
+    for name in SCRIPT_VERSION SOURCE_REPO BIN MANAGER CONF_DIR ENV_FILE CONFIG_JSON DATA_DIR SERVICE UNIT_FILE RUN_USER GO_DIR; do
       printf '%s=%q\n' "$name" "${!name}"
     done
     printf 'WORK_DIR=""\nTRANSACTION=0\nWAS_ACTIVE=0\nWAS_ENABLED=0\n'
@@ -230,9 +229,9 @@ release_binary() {
   printf '%s  %s\n' "$expected" "$WORK_DIR/$asset" | sha256sum -c - >/dev/null || return 1
   chmod 0755 "$WORK_DIR/$asset" || return 1
   "$WORK_DIR/$asset" version >/dev/null 2>&1 || return 1
-  # Older upstream binaries cannot serve the account/password login page.
+  # Require this repository's account management features before installing.
   "$WORK_DIR/$asset" hash-password --help >/dev/null 2>&1 || return 1
-  "$WORK_DIR/$asset" features 2>/dev/null | jq -e '.registration == true' >/dev/null || return 1
+  "$WORK_DIR/$asset" features 2>/dev/null | jq -e '.registration == true and .user_management == true and .password_change == true' >/dev/null || return 1
   mv -f "$WORK_DIR/$asset" "$WORK_DIR/candidate" || return 1
   info "已下载并校验 ${repo} $(jq -r '.tag_name' "$WORK_DIR/release.json")。"
 }
@@ -270,7 +269,7 @@ ensure_go() {
 }
 
 build_binary() {
-  local required
+  local required build_version
   info "Release 不可用，改从 ${SOURCE_REPO} 源码编译（可能需要几分钟）……"
   download "https://github.com/${SOURCE_REPO}/archive/refs/heads/main.tar.gz" "$WORK_DIR/source.tar.gz"
   mkdir "$WORK_DIR/source"
@@ -278,10 +277,12 @@ build_binary() {
   required=$(awk '$1 == "go" {print $2; exit}' "$WORK_DIR/source/go.mod")
   [[ "$required" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]] || die "源码的 Go 版本声明无效。"
   ensure_go "$required"
+  build_version=$(tr -d '\r\n' < "$WORK_DIR/source/internal/buildinfo/VERSION")
+  [[ "$build_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "源码版本声明无效。"
   (
     cd "$WORK_DIR/source"
     export CGO_ENABLED=0 GOOS=linux GOARCH="$ARCH" GOTOOLCHAIN=local
-    "$GO_BIN" build -trimpath -ldflags='-s -w -X main.version=source-main' -o "$WORK_DIR/candidate" ./cmd/subconv-next
+    "$GO_BIN" build -trimpath -ldflags="-s -w -X main.version=${build_version}" -o "$WORK_DIR/candidate" ./cmd/subconv-next
   )
   "$WORK_DIR/candidate" version >/dev/null || die "编译后的程序无法运行。"
 }
@@ -289,8 +290,7 @@ build_binary() {
 prepare_binary() {
   WORK_DIR=$(mktemp -d /tmp/subconv-next.XXXXXX)
   if release_binary "$SOURCE_REPO"; then return; fi
-  warn "本仓库暂无可用 Release，尝试上游 Release。"
-  if release_binary "$UPSTREAM_REPO"; then return; fi
+  warn "本仓库暂无兼容的 Release，改为编译本仓库最新源码。"
   build_binary
 }
 
@@ -343,7 +343,7 @@ show_access() {
   fi
   printf '登录账号：%s\n' "$(env_get SUBCONV_MANAGEMENT_USERNAME)"
   if [[ -n "$(env_get SUBCONV_MANAGEMENT_PASSWORD_HASH)" ]]; then
-    printf '登录密码：你通过 scn account 设置的密码（忘记时可重新设置）。\n'
+    printf '登录密码：脚本菜单第 6 项设置的管理员密码（忘记时运行 scn account 重置）。\n'
   else
     printf '初始登录密码：运行 scn token 查看；可运行 scn account 设置独立密码。\n'
   fi
@@ -423,6 +423,9 @@ set_account() {
   username=${username:-$(env_get SUBCONV_MANAGEMENT_USERNAME)}
   username=${username:-admin}
   [[ "$username" =~ ^[a-zA-Z0-9_.@-]{1,64}$ ]] || die "账号限 1–64 位英文字母、数字、_ . @ -。"
+  if [[ -f "$DATA_DIR/accounts.json" ]] && jq -e --arg username "${username,,}" '.accounts | has($username)' "$DATA_DIR/accounts.json" >/dev/null 2>&1; then
+    die "该账号名已被注册用户使用，请换一个管理员账号名。"
+  fi
   IFS= read -r -s -p '新密码（8–72 字节，输入不显示）：' password || return 0
   printf '\n'
   IFS= read -r -s -p '再次输入密码：' confirmation || return 0

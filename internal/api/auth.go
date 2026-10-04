@@ -37,6 +37,7 @@ type authLoginRequest struct {
 }
 
 type authSessionResponse struct {
+	Version             string `json:"version,omitempty"`
 	OK                  bool   `json:"ok"`
 	Required            bool   `json:"required"`
 	Configured          bool   `json:"configured"`
@@ -112,6 +113,7 @@ func (s *Server) handleAuthSession(w http.ResponseWriter, r *http.Request) {
 		RegistrationEnabled: s.registrationEnabled(),
 	}
 	if !publicConverter && authKind != managementAuthNone {
+		response.Version = s.version
 		response.Username = s.managementUsername()
 		response.Role = "admin"
 	}
@@ -160,7 +162,7 @@ func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	defer release()
 	if !s.validManagementCredentials(req.Username, req.Password) {
-		if account, exists := s.accountByUsername(req.Username); exists && authn.VerifyPassword(account.PasswordHash, req.Password) {
+		if account, exists := s.accountByUsername(req.Username); exists && !account.Disabled && authn.VerifyPassword(account.PasswordHash, req.Password) {
 			s.finishAccountLogin(w, r, account, http.StatusOK)
 			return
 		}
@@ -169,6 +171,10 @@ func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	s.finishManagementLogin(w, r)
+}
+
+func (s *Server) finishManagementLogin(w http.ResponseWriter, r *http.Request) {
 	sessionValue, expiresAt, err := s.newManagementSession()
 	if err != nil {
 		writeAPIError(w, http.StatusInternalServerError, "SESSION_FAILED", "could not create management session")
@@ -177,6 +183,7 @@ func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 	s.setSessionCookie(w, r, sessionValue, expiresAt)
 	s.appendLog("management login accepted from " + s.clientHost(r))
 	writeJSON(w, http.StatusOK, authSessionResponse{
+		Version:             s.version,
 		OK:                  true,
 		Required:            true,
 		Configured:          true,
@@ -227,6 +234,9 @@ func (s *Server) newManagementSession() (string, time.Time, error) {
 	expiresAt := time.Now().UTC().Add(managementSessionTTL)
 	payload := strconv.FormatInt(expiresAt.Unix(), 10) + "." + base64.RawURLEncoding.EncodeToString(nonce)
 	signature := s.managementSignature("session\x00" + payload)
+	if signature == "" {
+		return "", time.Time{}, fmt.Errorf("could not sign management session")
+	}
 	return payload + "." + signature, expiresAt, nil
 }
 
@@ -245,7 +255,7 @@ func (s *Server) managementSession(r *http.Request) (string, time.Time, bool) {
 	}
 	payload := parts[0] + "." + parts[1]
 	expectedSignature := s.managementSignature("session\x00" + payload)
-	if !constantTimeEqual(parts[2], expectedSignature) {
+	if expectedSignature == "" || !constantTimeEqual(parts[2], expectedSignature) {
 		return "", time.Time{}, false
 	}
 	expiresAt := time.Unix(expiresUnix, 0).UTC()

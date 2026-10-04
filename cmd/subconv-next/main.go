@@ -20,13 +20,14 @@ import (
 	"subconv-next/internal/api"
 	"subconv-next/internal/authn"
 	"subconv-next/internal/backup"
+	"subconv-next/internal/buildinfo"
 	"subconv-next/internal/config"
 	"subconv-next/internal/model"
 	"subconv-next/internal/parser"
 	"subconv-next/internal/pipeline"
 )
 
-var version = "dev"
+var version = buildinfo.Version()
 
 const defaultConfigPath = "config/config.json"
 
@@ -48,7 +49,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		_, _ = fmt.Fprintln(stdout, version)
 		return 0
 	case "features":
-		_ = json.NewEncoder(stdout).Encode(map[string]bool{"account_login": true, "registration": true})
+		_ = json.NewEncoder(stdout).Encode(map[string]bool{"account_login": true, "registration": true, "user_management": true, "password_change": true})
 		return 0
 	case "hash-password":
 		return runHashPassword(args[1:], os.Stdin, stdout, stderr)

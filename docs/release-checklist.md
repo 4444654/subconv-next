@@ -1,6 +1,6 @@
 # Release Checklist
 
-Use this checklist before tagging a V1 release.
+Use this checklist before bumping `internal/buildinfo/VERSION` and publishing a release.
 
 ## Automated Checks
 
@@ -8,7 +8,10 @@ Use this checklist before tagging a V1 release.
 - [ ] `go test ./...` passes.
 - [ ] `go test -race ./...` passes.
 - [ ] `go vet ./...` passes.
-- [ ] If a frontend package is added, `npm test` passes.
+- [ ] `node scripts/test-auth-ui.js` and `node scripts/test-user-ui.js` pass.
+- [ ] `bash -n subconv-next-onekey.sh`, ShellCheck and `sudo python3 scripts/test-native-install.py` pass.
+- [ ] Source build version matches `internal/buildinfo/VERSION`.
+- [ ] `python3 scripts/test-account-http.py /path/to/subconv-next` passes through a real local HTTPS proxy.
 - [ ] If a frontend package is added, `npm run build` passes.
 - [ ] `docker compose config` passes.
 - [ ] `docker buildx build --platform linux/amd64,linux/arm64 ...` succeeds.
@@ -72,6 +75,14 @@ Use this checklist before tagging a V1 release.
 - [ ] Published YAML responses include `Cache-Control: no-store`.
 - [ ] Published YAML responses do not expose full tokens in logs; only token hints are allowed.
 - [ ] Logs rotate and keep at most three 5 MB rotated files.
+
+## Accounts
+
+- [ ] Admin web user management lists registered accounts without hashes or session secrets.
+- [ ] Disable/enable and password reset revoke previous user cookies while preserving configuration and published links.
+- [ ] Ordinary users can change their own password with the current password and CSRF.
+- [ ] Administrator credentials can only be set through script menu 6 / `scn account`; web changes return `403`.
+- [ ] Script administrator names cannot collide with registered usernames.
 
 ## YAML Integrity
 

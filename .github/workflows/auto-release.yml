@@ -1,11 +1,14 @@
 name: release
 
 on:
+  push:
+    branches: [main]
+    paths: [internal/buildinfo/VERSION]
   workflow_dispatch:
     inputs:
       release_version:
-        description: Release version, for example 1.0.7
-        required: true
+        description: Version in internal/buildinfo/VERSION (leave blank to use that file)
+        required: false
         type: string
 
 permissions:
@@ -14,7 +17,7 @@ permissions:
 
 concurrency:
   group: release-main
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   release:
@@ -27,7 +30,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: 1.25.12
+          go-version: 1.27.x
 
       - uses: docker/setup-qemu-action@v3
 
@@ -41,8 +44,10 @@ jobs:
         run: |
           set -euo pipefail
           requested_version="${RELEASE_VERSION#v}"
-          if [[ ! "${requested_version}" =~ ^1\.0\.[0-9]+$ ]]; then
-            echo "release_version must match 1.0.N (for example 1.0.7)" >&2
+          declared_version="$(tr -d '\r\n' < internal/buildinfo/VERSION)"
+          requested_version="${requested_version:-${declared_version}}"
+          if [[ ! "${requested_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ || "${requested_version}" != "${declared_version}" ]]; then
+            echo "release_version must match internal/buildinfo/VERSION (for example 1.5.0)" >&2
             exit 1
           fi
           version="${requested_version}"
@@ -55,6 +60,12 @@ jobs:
         run: |
           test -z "$(gofmt -l $(find . -path './.git' -prune -o -path './.tmpinspect' -prune -o -path './vendor' -prune -o -name '*.go' -print))"
           node --check internal/api/static/app.js
+          node --check internal/api/static/login.js
+          node --check internal/api/static/account.js
+          node scripts/test-auth-ui.js
+          node scripts/test-user-ui.js
+          bash -n subconv-next-onekey.sh
+          sudo python3 scripts/test-native-install.py
           go test ./...
           go vet ./...
 
@@ -80,6 +91,9 @@ jobs:
           build subconv-next-linux-armv7 GOARCH=arm GOARM=7
           build subconv-next-linux-mips-softfloat GOARCH=mips GOMIPS=softfloat
           build subconv-next-linux-mipsle-softfloat GOARCH=mipsle GOMIPS=softfloat
+
+      - name: Test real HTTPS account flows
+        run: python3 scripts/test-account-http.py "$PWD/dist/subconv-next-linux-amd64"
 
       - name: Build OpenWrt IPK
         env:

@@ -866,6 +866,7 @@ function bindEvents() {
     }
   });
   document.getElementById("logout-btn").addEventListener("click", logoutManagementSession);
+  initializeAccountControls();
 
   document
     .getElementById("add-subscription-btn")
@@ -7966,6 +7967,8 @@ async function loadAuthSession() {
     state.role = session.role || "";
     state.publicConverter = Boolean(session.public_converter) || state.role === "user";
     state.csrfToken = session.csrf_token || "";
+    if (session.version) setVersionBadge(session.version);
+    updateAccountControls(session);
     document.getElementById("logout-btn")?.classList.toggle("hidden", !state.authRequired);
     const accountLabel = document.getElementById("account-label");
     if (accountLabel) {
@@ -8024,6 +8027,7 @@ function withWorkspace(rawUrl) {
   if (
     url.startsWith("/api/workspaces") ||
     url.startsWith("/api/auth/") ||
+    url.startsWith("/api/users") ||
     url.startsWith("/api/site-logo") ||
     url.startsWith("/api/parse") ||
     url.startsWith("/api/update-check")
