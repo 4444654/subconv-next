@@ -2,7 +2,7 @@
 # SubConv Next 原生安装与管理；Debian / Ubuntu amd64 / arm64，无需 Docker。
 set -Eeuo pipefail
 
-SCRIPT_VERSION="1.3.2"
+SCRIPT_VERSION="1.4.0"
 SOURCE_REPO="4444654/subconv-next"
 UPSTREAM_REPO="Earl9/subconv-next"
 BIN="/usr/local/bin/subconv-next"
@@ -133,6 +133,7 @@ SUBCONV_LOG_LEVEL=info
 SUBCONV_ACCESS_TOKEN=$(openssl rand -hex 24)
 SUBCONV_MANAGEMENT_USERNAME=admin
 SUBCONV_MANAGEMENT_PASSWORD_HASH=
+SUBCONV_REGISTRATION_ENABLED=true
 SUBCONV_PUBLIC_BASE_URL=
 SUBCONV_PUBLIC_CONVERTER=false
 SUBCONV_TRUST_PROXY_HEADERS=false
@@ -231,6 +232,7 @@ release_binary() {
   "$WORK_DIR/$asset" version >/dev/null 2>&1 || return 1
   # Older upstream binaries cannot serve the account/password login page.
   "$WORK_DIR/$asset" hash-password --help >/dev/null 2>&1 || return 1
+  "$WORK_DIR/$asset" features 2>/dev/null | jq -e '.registration == true' >/dev/null || return 1
   mv -f "$WORK_DIR/$asset" "$WORK_DIR/candidate" || return 1
   info "已下载并校验 ${repo} $(jq -r '.tag_name' "$WORK_DIR/release.json")。"
 }
@@ -534,6 +536,7 @@ usage() {
   logs               最近 100 行日志并持续跟随，Ctrl+C 结束
   token / reset-token
   account            设置网页登录账号和独立密码（忘记密码时也可使用）
+  registration on|off 开启或关闭前端注册（已注册账号仍可登录）
   menu-update        将当前脚本保存为 scn 管理菜单
   port 9876          修改端口
   bind local|public  切换本机/公网监听
@@ -567,6 +570,10 @@ main() {
     token) need_install; printf 'API Token：%s\n' "$(env_get SUBCONV_ACCESS_TOKEN)" ;;
     reset-token) change_setting SUBCONV_ACCESS_TOKEN "$(openssl rand -hex 24)" ;;
     account) set_account ;;
+    registration)
+      case "${2:-}" in on) value=true ;; off) value=false ;; *) die "用法：scn registration on|off" ;; esac
+      change_setting SUBCONV_REGISTRATION_ENABLED "$value"
+      ;;
     port) change_setting SUBCONV_PORT "${2:-}" ;;
     bind)
       case "${2:-}" in local) value=127.0.0.1 ;; public) value=0.0.0.0 ;; *) die "用法：scn bind local|public" ;; esac

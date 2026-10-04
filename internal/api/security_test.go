@@ -222,7 +222,7 @@ func TestManagementLoginCreatesCookieSession(t *testing.T) {
 	loginPageReq.RemoteAddr = "203.0.113.30:49152"
 	loginPageRec := httptest.NewRecorder()
 	handler.ServeHTTP(loginPageRec, loginPageReq)
-	if loginPageRec.Code != http.StatusOK || !strings.Contains(loginPageRec.Body.String(), "登录管理后台") || !strings.Contains(loginPageRec.Body.String(), `autocomplete="username"`) {
+	if loginPageRec.Code != http.StatusOK || !strings.Contains(loginPageRec.Body.String(), "登录 SubConv Next") || !strings.Contains(loginPageRec.Body.String(), `autocomplete="username"`) {
 		t.Fatalf("login page status/body = %d %q", loginPageRec.Code, loginPageRec.Body.String())
 	}
 

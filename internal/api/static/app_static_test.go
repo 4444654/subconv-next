@@ -150,7 +150,7 @@ func TestMultipleLocalDraftStorageHooksExist(t *testing.T) {
 		"function loadLocalDrafts",
 		"function renderDraftManager",
 		"draft-manager-dialog",
-		"localStorage.removeItem(LOCAL_DRAFT_STORAGE_KEY)",
+		"localStorage.removeItem(draftStorageKey(LOCAL_DRAFT_STORAGE_KEY))",
 	}
 	for _, needle := range required {
 		if !strings.Contains(app, needle) {

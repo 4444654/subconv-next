@@ -207,8 +207,7 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 		OK:            true,
 		UptimeSeconds: s.uptimeSeconds(),
 	}
-	service := s.snapshotConfig().Service
-	if !service.PublicConverter && (!s.publiclyBound() || s.authorizeManagementRequest(r)) {
+	if !s.restrictedRequest(r) && (!s.publiclyBound() || s.authorizeManagementRequest(r)) {
 		response.Version = s.version
 		response.DataDir = s.baseDataDir()
 	}
@@ -246,7 +245,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	outputPath := status.OutputPath
-	if s.snapshotConfig().Service.PublicConverter {
+	if s.restrictedRequest(r) {
 		// Runtime paths are an implementation detail and may reveal the
 		// container layout when this endpoint is exposed to the Internet.
 		outputPath = ""
@@ -431,7 +430,7 @@ func (s *Server) handleParse(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
 		return
 	}
-	if s.snapshotConfig().Service.PublicConverter && len(req.Content) > publicMaxParseContent {
+	if s.restrictedRequest(r) && len(req.Content) > publicMaxParseContent {
 		writeAPIError(w, http.StatusRequestEntityTooLarge, "PUBLIC_LIMIT_EXCEEDED", "content exceeds the public parsing limit")
 		return
 	}
@@ -459,13 +458,13 @@ func (s *Server) handleGenerate(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
 		return
 	}
-	if s.snapshotConfig().Service.PublicConverter && len(req.Nodes) > publicMaxGenerateNodes {
+	if s.restrictedRequest(r) && len(req.Nodes) > publicMaxGenerateNodes {
 		writeAPIError(w, http.StatusRequestEntityTooLarge, "PUBLIC_LIMIT_EXCEEDED", "node count exceeds the public generation limit")
 		return
 	}
 
 	cfg := s.snapshotConfig()
-	if cfg.Service.PublicConverter {
+	if s.restrictedRequest(r) {
 		// Stateless public rendering must not inherit server-side providers,
 		// headers, rules, or other deployment configuration.
 		cfg = model.DefaultConfig()
@@ -502,7 +501,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, configResponse{
 			OK:     true,
-			Config: redactConfigForResponse(cfg, s.snapshotConfig().Service.PublicConverter),
+			Config: redactConfigForResponse(cfg, s.restrictedRequest(r)),
 		})
 	case http.MethodPut:
 		ref, err := s.requireWorkspace(r)
@@ -521,7 +520,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		req = config.Normalize(req)
-		if err := s.validatePublicConverterConfig(req); err != nil {
+		if err := s.validatePublicConverterConfig(req, s.restrictedRequest(r)); err != nil {
 			writeAPIError(w, http.StatusBadRequest, "PUBLIC_CONFIG_REJECTED", err.Error())
 			return
 		}
@@ -567,7 +566,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, configResponse{
 			OK:     true,
-			Config: redactConfigForResponse(req, s.snapshotConfig().Service.PublicConverter),
+			Config: redactConfigForResponse(req, s.restrictedRequest(r)),
 		})
 	default:
 		methodNotAllowed(w, http.MethodGet+", "+http.MethodPut)
@@ -579,7 +578,8 @@ func (s *Server) handleWorkspaces(w http.ResponseWriter, r *http.Request) {
 		methodNotAllowed(w, http.MethodPost)
 		return
 	}
-	ref, err := s.createWorkspace()
+	account, _ := s.registeredAccountForRequest(r)
+	ref, err := s.createWorkspaceForOwner(account.ID)
 	if err != nil {
 		if errors.Is(err, errWorkspaceLimitReached) {
 			w.Header().Set("Retry-After", "3600")
@@ -651,7 +651,7 @@ func (s *Server) handleBindWorkspacePublished(w http.ResponseWriter, r *http.Req
 		return
 	}
 	published, err := s.loadPublishedByID(publishID)
-	if err != nil || !publishedRestorable(published) {
+	if err != nil || !publishedRestorable(published) || !s.publishedAccessible(r, published) {
 		writeAPIError(w, http.StatusNotFound, "PUBLISHED_NOT_FOUND", "published subscription not found")
 		return
 	}
@@ -686,7 +686,7 @@ func (s *Server) handleRestoreWorkspaceDraft(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	cfg := config.Normalize(req.Config)
-	if err := s.validatePublicConverterConfig(cfg); err != nil {
+	if err := s.validatePublicConverterConfig(cfg, s.restrictedRequest(r)); err != nil {
 		writeAPIError(w, http.StatusBadRequest, "PUBLIC_CONFIG_REJECTED", err.Error())
 		return
 	}
@@ -712,7 +712,7 @@ func (s *Server) handleRestoreWorkspaceDraft(w http.ResponseWriter, r *http.Requ
 	publishID := strings.TrimSpace(req.PublishRef.PublishID)
 	if publishID != "" {
 		published, err := s.loadPublishedByID(publishID)
-		if err == nil && publishedRestorable(published) {
+		if err == nil && publishedRestorable(published) && s.publishedAccessible(r, published) {
 			ref.Meta.PublishID = published.ID
 			ref.Meta.LegacyPublishedToken = ""
 			ref.Meta.LegacyPublishedAt = time.Time{}
@@ -740,7 +740,7 @@ func (s *Server) handleRestoreWorkspaceFromPublished(w http.ResponseWriter, r *h
 	// rendered YAML, not a credential for recovering the source configuration.
 	// In anonymous public mode, accepting it here would disclose upstream URLs,
 	// credentials, and manual source content to anyone who obtains that link.
-	if s.snapshotConfig().Service.PublicConverter {
+	if s.restrictedRequest(r) {
 		http.NotFound(w, r)
 		return
 	}
@@ -786,7 +786,7 @@ func (s *Server) handleRestoreWorkspaceFromPublished(w http.ResponseWriter, r *h
 		return
 	}
 	cfg = config.Normalize(cfg)
-	if err := s.validatePublicConverterConfig(cfg); err != nil {
+	if err := s.validatePublicConverterConfig(cfg, s.restrictedRequest(r)); err != nil {
 		writeAPIError(w, http.StatusBadRequest, "PUBLIC_CONFIG_REJECTED", err.Error())
 		return
 	}
@@ -838,7 +838,7 @@ func (s *Server) handlePublished(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	published, err := s.loadPublishedByID(ref.Meta.PublishID)
-	if err != nil || !publishedRestorable(published) {
+	if err != nil || !publishedRestorable(published) || !s.publishedAccessible(r, published) {
 		writeJSON(w, http.StatusOK, publishedStatusResponse{OK: true})
 		return
 	}
@@ -921,11 +921,14 @@ func (s *Server) loadWorkspacePublished(r *http.Request, publishID string) (publ
 	if err != nil || !publishedRestorable(published) {
 		return publishedRef{}, errWorkspaceNotFound
 	}
+	if !s.publishedAccessible(r, published) {
+		return publishedRef{}, errWorkspaceNotFound
+	}
 	return published, nil
 }
 
-func (s *Server) validatePublicConverterConfig(cfg model.Config) error {
-	if !s.snapshotConfig().Service.PublicConverter {
+func (s *Server) validatePublicConverterConfig(cfg model.Config, restricted ...bool) error {
+	if !s.snapshotConfig().Service.PublicConverter && !(len(restricted) > 0 && restricted[0]) {
 		return nil
 	}
 	if cfg.Service.AllowLAN {
@@ -1108,7 +1111,7 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, refreshResponse{
 		OK:              true,
 		NodeCount:       outcome.Result.NodeCount,
-		OutputPath:      publicResponsePath(s.snapshotConfig().Service.PublicConverter, published.CurrentPath),
+		OutputPath:      publicResponsePath(s.restrictedRequest(r), published.CurrentPath),
 		PublishID:       published.ID,
 		TokenHint:       published.Meta.TokenHint,
 		SubscriptionURL: subscriptionURL,

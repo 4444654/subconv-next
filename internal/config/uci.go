@@ -207,6 +207,9 @@ func applyServiceSection(dst *model.ServiceConfig, section uciSection) error {
 	setString(section, "subscription_token", &dst.SubscriptionToken)
 	setString(section, "management_username", &dst.ManagementUsername)
 	setString(section, "management_password_hash", &dst.ManagementPasswordHash)
+	if err := setBool(section, "registration_enabled", &dst.RegistrationEnabled); err != nil {
+		return fmt.Errorf("service.registration_enabled: %w", err)
+	}
 	if err := setBool(section, "public_converter", &dst.PublicConverter); err != nil {
 		return fmt.Errorf("service.public_converter: %w", err)
 	}

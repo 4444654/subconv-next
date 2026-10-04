@@ -633,6 +633,8 @@ const state = {
   authRequired: false,
   publicConverter: false,
   csrfToken: "",
+  userId: "",
+  role: "",
   config: null,
   activeWorkspace: "config",
   activeSourceMode: "rules",
@@ -721,8 +723,6 @@ document.addEventListener("DOMContentLoaded", () => {
   decorateStaticIcons();
   decorateButtons();
   renderOutputTiles();
-  applyDefaultState();
-  bindEvents();
   init();
 });
 
@@ -792,6 +792,8 @@ function setButtonIconText(target, text) {
 
 async function init() {
   if (!(await loadAuthSession())) return;
+  applyDefaultState();
+  bindEvents();
   setValue("backend-origin", window.location.origin);
   updateGeneratedUrlPlaceholder();
   renderResult(false);
@@ -2281,14 +2283,18 @@ function loadDraftStore() {
     }
   }
   if (legacyDraft) {
-    localStorage.removeItem(LOCAL_DRAFT_STORAGE_KEY);
+    localStorage.removeItem(draftStorageKey(LOCAL_DRAFT_STORAGE_KEY));
   }
   return store;
 }
 
+function draftStorageKey(baseKey) {
+  return state.role === "user" && state.userId ? `${baseKey}:${state.userId}` : baseKey;
+}
+
 function readDraftStore() {
   const fallback = { version: 1, active_id: "", drafts: [] };
-  const raw = localStorage.getItem(LOCAL_DRAFTS_STORAGE_KEY);
+  const raw = localStorage.getItem(draftStorageKey(LOCAL_DRAFTS_STORAGE_KEY));
   if (!raw) return fallback;
   try {
     const parsed = JSON.parse(raw);
@@ -2304,18 +2310,18 @@ function readDraftStore() {
       drafts,
     };
   } catch (error) {
-    localStorage.removeItem(LOCAL_DRAFTS_STORAGE_KEY);
+    localStorage.removeItem(draftStorageKey(LOCAL_DRAFTS_STORAGE_KEY));
     return fallback;
   }
 }
 
 function loadLegacyLocalDraft() {
-  const raw = localStorage.getItem(LOCAL_DRAFT_STORAGE_KEY);
+  const raw = localStorage.getItem(draftStorageKey(LOCAL_DRAFT_STORAGE_KEY));
   if (!raw) return null;
   try {
     return normalizeLocalDraftPayload(JSON.parse(raw));
   } catch (error) {
-    localStorage.removeItem(LOCAL_DRAFT_STORAGE_KEY);
+    localStorage.removeItem(draftStorageKey(LOCAL_DRAFT_STORAGE_KEY));
     return null;
   }
 }
@@ -2332,8 +2338,8 @@ function saveDraftStore(store) {
       : latestLocalDraft({ drafts })?.draft_id || "",
     drafts: sortedLocalDrafts(drafts),
   };
-  localStorage.setItem(LOCAL_DRAFTS_STORAGE_KEY, JSON.stringify(nextStore));
-  localStorage.removeItem(LOCAL_DRAFT_STORAGE_KEY);
+  localStorage.setItem(draftStorageKey(LOCAL_DRAFTS_STORAGE_KEY), JSON.stringify(nextStore));
+  localStorage.removeItem(draftStorageKey(LOCAL_DRAFT_STORAGE_KEY));
   return nextStore;
 }
 
@@ -7954,17 +7960,27 @@ async function loadAuthSession() {
       headers: { Accept: "application/json" },
     });
     const session = await response.json();
+    if (!response.ok || !session.ok) throw new Error("session unavailable");
     state.authRequired = Boolean(session.required);
-    state.publicConverter = Boolean(session.public_converter);
+    state.userId = session.user_id || "";
+    state.role = session.role || "";
+    state.publicConverter = Boolean(session.public_converter) || state.role === "user";
     state.csrfToken = session.csrf_token || "";
     document.getElementById("logout-btn")?.classList.toggle("hidden", !state.authRequired);
+    const accountLabel = document.getElementById("account-label");
+    if (accountLabel) {
+      accountLabel.textContent = session.username || "";
+      accountLabel.title = session.username || "";
+      accountLabel.classList.toggle("hidden", !session.username);
+    }
     if (state.authRequired && !session.authenticated) {
       redirectToLogin();
       return false;
     }
     return true;
   } catch (_error) {
-    return true;
+    showToast("无法确认登录状态，请刷新页面重试。", true);
+    return false;
   }
 }
 

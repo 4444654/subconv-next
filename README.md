@@ -60,6 +60,8 @@ If curl is missing, run `apt-get update && apt-get install -y curl ca-certificat
 
 Run `scn` to open the Chinese management menu. The default listener is `127.0.0.1:9876`; use a reverse proxy or run `scn bind public` and allow the port in your firewall for direct IP access. Sign in with username `admin` and the initial password shown by `scn token`. Run `scn account` to set your own username and an independent, bcrypt-hashed web password while preserving API tokens and subscriptions. Existing installations should rerun the installer above to upgrade both the binary and manager. See the [native installation guide (中文)](docs/native-install.md) for updates, recovery, paths, and troubleshooting.
 
+The login page also includes **注册账号** for self-service signup. New accounts receive isolated converter workspaces, publications and browser drafts. Registration opens by default after the administrator is configured; use `scn registration off` to close signup while retaining existing logins. See [registration and permissions](docs/registration.md).
+
 ### Docker Compose
 
 The repository includes a hardened [docker-compose.yml](docker-compose.yml). It initializes `/data` ownership for the unprivileged container user, mounts `/config` read-only, and publishes the web port on loopback by default.

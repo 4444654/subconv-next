@@ -21,6 +21,10 @@
   box-sizing: border-box;
 }
 
+[hidden] {
+  display: none !important;
+}
+
 html,
 body {
   min-height: 100%;
@@ -143,6 +147,61 @@ input {
   font-weight: 620;
 }
 
+.auth-switch {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 22px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.4);
+}
+
+.auth-switch button {
+  flex: 1;
+  min-height: 38px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.auth-switch button[aria-pressed="true"] {
+  background: var(--panel-solid);
+  color: var(--accent);
+  font-weight: 650;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.06);
+}
+
+.auth-switch button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.auth-switch button:disabled {
+  cursor: wait;
+}
+
+.confirm-password-field {
+  display: grid;
+  gap: 10px;
+}
+
+.confirm-password-field label {
+  color: #5c4a44;
+  font-size: 13px;
+  font-weight: 620;
+}
+
+.register-help {
+  margin: 2px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.7;
+}
+
 .password-control {
   position: relative;
 }
@@ -230,6 +289,7 @@ input {
   color: var(--danger);
   font-size: 12px;
   line-height: 1.5;
+  overflow-wrap: anywhere;
 }
 
 .login-message.visible {

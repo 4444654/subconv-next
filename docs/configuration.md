@@ -57,6 +57,7 @@ subconv-next generate
 | `SUBCONV_ACCESS_TOKEN` | empty | API token and initial web password until an independent password is configured. If set on a non-loopback listener, it must contain at least 24 characters. |
 | `SUBCONV_MANAGEMENT_USERNAME` | `admin` | Web login username; 1–64 letters, digits, `_`, `.`, `@` or `-`. |
 | `SUBCONV_MANAGEMENT_PASSWORD_HASH` | empty | Independent bcrypt web password hash, cost 10–14. When set, the API token cannot be used as the web password. |
+| `SUBCONV_REGISTRATION_ENABLED` | `true` | Open frontend registration for isolated user accounts. Disabling it keeps existing user logins available. Effective only when management login is configured and anonymous/insecure preview modes are off. |
 | `SUBCONV_PUBLIC_CONVERTER` | `false` | Allow anonymous access to the workspace-isolated converter UI and approved converter APIs. |
 | `SUBCONV_TRUST_PROXY_HEADERS` | `false` | Trust proxy-provided client IP headers for in-process rate limits; only use behind a private trusted proxy. |
 | `SUBCONV_ALLOW_INSECURE_PUBLIC` | `false` | Explicitly disable management authentication. Preview use only. |
@@ -111,6 +112,8 @@ Published subscription links depend on:
 If `/data` is not mounted, links and workspace state can be lost when the container is removed.
 
 ## Public Base URL
+
+Frontend signup and user permissions are documented in [Registration](registration.md). Registered accounts are stored as bcrypt hashes in `accounts.json` under the data directory; they do not replace the configured administrator or grant access to API tokens.
 
 `SUBCONV_PUBLIC_BASE_URL` controls the base URL returned by publish APIs and the expected browser origin used by API same-origin checks. Behind a TLS reverse proxy, set it to the address used in the browser, including a non-default port if applicable. Native installs can use `scn url https://subconv.example.com`.
 

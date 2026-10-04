@@ -1,6 +1,6 @@
 # Debian / Ubuntu 原生一键安装
 
-适用于使用 systemd 的 Debian / Ubuntu VPS，支持 x86_64（amd64）和 aarch64（arm64），不需要 Docker。安装器版本：**1.3.2**。
+适用于使用 systemd 的 Debian / Ubuntu VPS，支持 x86_64（amd64）和 aarch64（arm64），不需要 Docker。安装器版本：**1.4.0**。
 
 ## 安装
 
@@ -24,7 +24,7 @@ bash <(curl -fLsS https://raw.githubusercontent.com/4444654/subconv-next/main/su
 
 推荐使用先下载再执行的第一种方式：下载失败时不会运行空脚本。使用普通用户时，将执行脚本的 `bash` 改为 `sudo bash`。
 
-安装器自动补齐依赖，在下载程序前生成 `scn` 管理命令。优先下载本仓库的 Release；没有可用发布包时尝试 `Earl9/subconv-next` 上游 Release。下载后必须通过 `checksums.txt` 的 SHA-256 校验、程序版本检查及账号登录功能检查。发布包不可用或不支持账号登录时，自动下载本仓库 `main` 分支源码，安装符合 `go.mod` 要求的 Go 并编译。源码编译需要能访问 GitHub、Go 下载站和 Go 模块源；首次编译可能需要几分钟。
+安装器自动补齐依赖，在下载程序前生成 `scn` 管理命令。优先下载本仓库的 Release；没有可用发布包时尝试 `Earl9/subconv-next` 上游 Release。下载后必须通过 `checksums.txt` 的 SHA-256 校验、程序版本检查及账号登录及注册功能检查。发布包不可用或不支持账号登录和注册时，自动下载本仓库 `main` 分支源码，安装符合 `go.mod` 要求的 Go 并编译。源码编译需要能访问 GitHub、Go 下载站和 Go 模块源；首次编译可能需要几分钟。
 
 服务以独立用户运行，启用 systemd 开机自启。只有服务运行且 `/healthz` 返回成功，安装器才报告安装成功；否则返回非零退出码。
 
@@ -79,12 +79,21 @@ scn account
 
 从 v1.2.0 升级请重新执行上方一键安装命令，以同时更新程序和 `scn` 管理器。升级后第一次用 `admin` 和原 Token 登录；已设置过的独立账号密码会在后续更新中保留。当前管理会话有效期仍为 12 小时。
 
+### 前端注册
+
+升级到当前程序后，登录页会显示 **注册账号**。用户填写账号、密码、确认密码，注册成功即自动登录。账号为 3–64 位英文字母、数字或 `_ . @ -`，不区分大小写；密码为 8–72 字节，两次输入必须完全一致。管理员账号名不可注册。
+
+注册用户的工作区、发布订阅和浏览器草稿按账号隔离；普通账号不能读取管理员或其他用户的配置，也不能启用私有网络抓取、跳过 TLS 验证或改动服务账号。账号保存在 `/var/lib/subconv-next/accounts.json`，密码为 bcrypt 哈希，文件权限为 `0600`；更新、重启和卸载保留此文件。
+
+默认开放注册（最多 256 个账号）。可用 `scn registration off` 关闭注册入口和接口，已注册账号仍可登录；用 `scn registration on` 重新开放。匿名公开转换模式不显示注册入口。详情见 [注册与用户隔离](registration.md)。
+
 | 命令 | 功能 |
 | --- | --- |
 | `scn status` | 服务状态与监听地址 |
 | `scn start` / `scn stop` / `scn restart` | 启动、停止、重启 |
 | `scn logs` | 查看最近日志并持续跟随，Ctrl+C 返回 |
 | `scn account` | 设置或重置网页登录账号与独立密码 |
+| `scn registration on` / `scn registration off` | 开放或关闭前端注册 |
 | `scn token` / `scn reset-token` | 查看或重置 API Token（初始网页登录密码） |
 | `scn port 9876` | 修改端口，检查范围和占用 |
 | `scn bind local` / `scn bind public` | 切换本机/公网监听 |
@@ -103,6 +112,7 @@ scn account
 | `/etc/subconv-next/subconv-next.env` | 监听设置、API Token、登录账号、密码哈希、数据目录等 |
 | `/etc/subconv-next/config.json` | 初始配置；程序自动补齐默认值 |
 | `/var/lib/subconv-next` | 工作区、订阅、缓存等持久化数据 |
+| `/var/lib/subconv-next/accounts.json` | 注册账号和密码哈希 |
 | `/etc/systemd/system/subconv-next.service` | systemd 服务 |
 | `/opt/subconv-next/go` | apt 的 Go 版本不足时使用的独立工具链 |
 

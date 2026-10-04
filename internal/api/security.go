@@ -73,14 +73,20 @@ func (s *Server) securityMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		service := s.snapshotConfig().Service
 		setSecurityHeaders(w, r, service.TrustProxyHeaders)
-		if strings.HasPrefix(r.URL.Path, "/api/") && (service.PublicConverter || isUnsafeMethod(r.Method)) && !sameOriginRequest(r, service.PublicBaseURL, service.TrustProxyHeaders) {
+		if strings.HasPrefix(r.URL.Path, "/api/") && (s.restrictedRequest(r) || isUnsafeMethod(r.Method)) && !sameOriginRequest(r, service.PublicBaseURL, service.TrustProxyHeaders) {
 			writeAPIError(w, http.StatusForbidden, "CROSS_ORIGIN_REQUEST", "cross-origin API request rejected")
 			return
 		}
-		if r.URL.Path == "/api/auth/login" {
-			if !limiter.allow(s.clientHost(r)+"\x00login", authFailureRateLimit, time.Now()) {
+		if r.URL.Path == "/api/auth/login" || r.URL.Path == "/api/auth/register" {
+			limit := authFailureRateLimit
+			globalLimit := anonymousRateLimit
+			if r.URL.Path == "/api/auth/register" {
+				limit = anonymousWorkspaceRateLimit
+				globalLimit = authFailureRateLimit
+			}
+			if !limiter.allow(s.clientHost(r)+"\x00"+r.URL.Path, limit, time.Now()) || !limiter.allow("global\x00"+r.URL.Path, globalLimit, time.Now()) {
 				w.Header().Set("Retry-After", "60")
-				writeAPIError(w, http.StatusTooManyRequests, "RATE_LIMITED", "too many login attempts; retry later")
+				writeAPIError(w, http.StatusTooManyRequests, "RATE_LIMITED", "too many authentication attempts; retry later")
 				return
 			}
 			next.ServeHTTP(w, r)
@@ -117,9 +123,38 @@ func (s *Server) securityMiddleware(next http.Handler) http.Handler {
 			writeManagementUnauthorized(w, r)
 			return
 		}
-		if authKind == managementAuthSession && strings.HasPrefix(r.URL.Path, "/api/") && isUnsafeMethod(r.Method) && !s.validManagementCSRF(r) {
+		authenticatedRequest, contextOK := s.withAccountContext(r, authKind)
+		if !contextOK {
+			writeManagementUnauthorized(w, r)
+			return
+		}
+		r = authenticatedRequest
+		if (authKind == managementAuthSession || authKind == managementAuthUserSession) && strings.HasPrefix(r.URL.Path, "/api/") && isUnsafeMethod(r.Method) && !s.validManagementCSRF(r) {
 			writeAPIError(w, http.StatusForbidden, "CSRF_TOKEN_INVALID", "management CSRF token is missing or invalid")
 			return
+		}
+		if authKind == managementAuthUserSession {
+			if !isPublicConverterPath(r.URL.Path) && r.URL.Path != "/api/auth/logout" {
+				writeAPIError(w, http.StatusForbidden, "FORBIDDEN", "administrator access is required")
+				return
+			}
+			if strings.HasPrefix(r.URL.Path, "/api/") {
+				account, _ := s.registeredAccountForRequest(r)
+				limit := anonymousRateLimit
+				class := rateLimitClass(r.URL.Path)
+				if isExpensiveAPIPath(r.URL.Path) {
+					limit = anonymousExpensiveRateLimit
+				}
+				if r.URL.Path == "/api/workspaces" && r.Method == http.MethodPost {
+					limit = anonymousWorkspaceRateLimit
+					class = "registered-workspace"
+				}
+				if !limiter.allow(account.ID+"\x00"+class, limit, time.Now()) {
+					w.Header().Set("Retry-After", "60")
+					writeAPIError(w, http.StatusTooManyRequests, "RATE_LIMITED", "too many requests; retry later")
+					return
+				}
+			}
 		}
 
 		if strings.HasPrefix(r.URL.Path, "/api/") && s.publiclyBound() {

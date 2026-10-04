@@ -35,6 +35,10 @@ type Server struct {
 	publishedCreateMu sync.Mutex
 	maxPublications   int
 	logWriteMu        sync.Mutex
+	accountsMu        sync.Mutex
+	accountsLoaded    bool
+	accounts          map[string]registeredAccount
+	passwordSlots     chan struct{}
 
 	refreshMu    sync.Mutex
 	refreshRuns  map[string]chan struct{}
@@ -94,6 +98,7 @@ func NewServer(version string, cfg model.Config) *Server {
 		maxPublications:     maxPublications,
 		publishedTokenIndex: map[string]string{},
 		publishedAccess:     map[string]*publishedAccessState{},
+		passwordSlots:       make(chan struct{}, 4),
 	}
 }
 
@@ -102,6 +107,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/healthz", s.handleHealthz)
 	mux.HandleFunc("/api/auth/session", s.handleAuthSession)
 	mux.HandleFunc("/api/auth/login", s.handleAuthLogin)
+	mux.HandleFunc("/api/auth/register", s.handleAuthRegister)
 	mux.HandleFunc("/api/auth/logout", s.handleAuthLogout)
 	mux.HandleFunc("/api/status", s.handleStatus)
 	mux.HandleFunc("/api/workspaces", s.handleWorkspaces)
@@ -144,7 +150,7 @@ func (s *Server) Handler() http.Handler {
 		http.Redirect(w, r, "/login", http.StatusMovedPermanently)
 	})
 	mux.HandleFunc("/", serveIndex)
-	return s.recoveryMiddleware(s.securityMiddleware(s.workspaceLockMiddleware(mux)))
+	return s.recoveryMiddleware(s.securityMiddleware(s.workspaceLockMiddleware(s.workspaceAccessMiddleware(mux))))
 }
 
 func ListenAddress(cfg model.Config) string {

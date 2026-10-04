@@ -25,6 +25,7 @@ type workspaceMeta struct {
 	CreatedAt            time.Time `json:"created_at"`
 	LastAccessAt         time.Time `json:"last_access_at,omitempty"`
 	PublishID            string    `json:"publish_id,omitempty"`
+	OwnerID              string    `json:"owner_id,omitempty"`
 	LegacyExpiresAt      time.Time `json:"expires_at,omitempty"`
 	LegacyPublishedToken string    `json:"published_token,omitempty"`
 	LegacyPublishedAt    time.Time `json:"published_at,omitempty"`
@@ -136,6 +137,10 @@ func validateWorkspaceRefIdentity(ref workspaceRef) error {
 }
 
 func (s *Server) createWorkspace() (workspaceRef, error) {
+	return s.createWorkspaceForOwner("")
+}
+
+func (s *Server) createWorkspaceForOwner(ownerID string) (workspaceRef, error) {
 	s.workspaceCreateMu.Lock()
 	defer s.workspaceCreateMu.Unlock()
 
@@ -160,6 +165,7 @@ func (s *Server) createWorkspace() (workspaceRef, error) {
 		Hash:         ref.Hash,
 		CreatedAt:    now,
 		LastAccessAt: now,
+		OwnerID:      ownerID,
 	}
 	cfg := s.workspaceBaseConfig()
 	s.applyWorkspaceConfigPolicy(&cfg, ref)
@@ -232,9 +238,10 @@ func (s *Server) applyWorkspaceConfigPolicy(cfg *model.Config, ref workspaceRef)
 	// Login settings belong to the daemon, never to an editable workspace.
 	cfg.Service.ManagementUsername = ""
 	cfg.Service.ManagementPasswordHash = ""
+	cfg.Service.RegistrationEnabled = false
 
 	base := s.snapshotConfig().Service
-	if !base.PublicConverter {
+	if !base.PublicConverter && ref.Meta.OwnerID == "" {
 		return
 	}
 	cfg.Service.Enabled = true

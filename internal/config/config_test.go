@@ -64,6 +64,7 @@ func TestLoadJSONAndUCIParity(t *testing.T) {
 			MaxWorkspaces:                   model.DefaultMaxWorkspaces,
 			MaxPublications:                 model.DefaultMaxPublications,
 			MaxConcurrentRefreshes:          model.DefaultMaxRefreshWorkers,
+			RegistrationEnabled:             true,
 			AllowLAN:                        false,
 		},
 		Subscriptions: []model.SubscriptionConfig{

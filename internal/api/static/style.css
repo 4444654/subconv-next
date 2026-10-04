@@ -169,6 +169,15 @@ button {
   flex-wrap: wrap;
 }
 
+.header-actions .account-label {
+  display: block;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 36px;
+}
+
 .status-badge,
 .version-badge {
   display: inline-flex;

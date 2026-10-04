@@ -28,6 +28,7 @@ const (
 	managementAuthTrusted
 	managementAuthToken
 	managementAuthSession
+	managementAuthUserSession
 )
 
 type authLoginRequest struct {
@@ -36,13 +37,17 @@ type authLoginRequest struct {
 }
 
 type authSessionResponse struct {
-	OK              bool   `json:"ok"`
-	Required        bool   `json:"required"`
-	Configured      bool   `json:"configured"`
-	Authenticated   bool   `json:"authenticated"`
-	PublicConverter bool   `json:"public_converter,omitempty"`
-	ExpiresAt       string `json:"expires_at,omitempty"`
-	CSRFToken       string `json:"csrf_token,omitempty"`
+	OK                  bool   `json:"ok"`
+	Required            bool   `json:"required"`
+	Configured          bool   `json:"configured"`
+	Authenticated       bool   `json:"authenticated"`
+	PublicConverter     bool   `json:"public_converter,omitempty"`
+	RegistrationEnabled bool   `json:"registration_enabled"`
+	Username            string `json:"username,omitempty"`
+	UserID              string `json:"user_id,omitempty"`
+	Role                string `json:"role,omitempty"`
+	ExpiresAt           string `json:"expires_at,omitempty"`
+	CSRFToken           string `json:"csrf_token,omitempty"`
 }
 
 func (s *Server) expectedAccessToken() string {
@@ -79,6 +84,9 @@ func (s *Server) managementAuthorization(r *http.Request) managementAuthKind {
 	if _, _, ok := s.managementSession(r); ok {
 		return managementAuthSession
 	}
+	if _, _, _, ok := s.userSession(r); ok {
+		return managementAuthUserSession
+	}
 	return managementAuthNone
 }
 
@@ -96,14 +104,28 @@ func (s *Server) handleAuthSession(w http.ResponseWriter, r *http.Request) {
 	required := !publicConverter && s.managementLoginRequired(r)
 	authKind := s.managementAuthorization(r)
 	response := authSessionResponse{
-		OK:              true,
-		Required:        required,
-		Configured:      !publicConverter && s.managementLoginConfigured(),
-		Authenticated:   publicConverter || !required || authKind != managementAuthNone,
-		PublicConverter: publicConverter,
+		OK:                  true,
+		Required:            required,
+		Configured:          !publicConverter && s.managementLoginConfigured(),
+		Authenticated:       publicConverter || !required || authKind != managementAuthNone,
+		PublicConverter:     publicConverter,
+		RegistrationEnabled: s.registrationEnabled(),
+	}
+	if !publicConverter && authKind != managementAuthNone {
+		response.Username = s.managementUsername()
+		response.Role = "admin"
 	}
 	if authKind == managementAuthSession {
 		if sessionValue, expiresAt, ok := s.managementSession(r); ok {
+			response.ExpiresAt = expiresAt.UTC().Format(time.RFC3339)
+			response.CSRFToken = s.managementCSRFToken(sessionValue)
+		}
+	}
+	if authKind == managementAuthUserSession {
+		if account, sessionValue, expiresAt, ok := s.userSession(r); ok {
+			response.Username = account.Username
+			response.UserID = account.ID
+			response.Role = "user"
 			response.ExpiresAt = expiresAt.UTC().Format(time.RFC3339)
 			response.CSRFToken = s.managementCSRFToken(sessionValue)
 		}
@@ -126,12 +148,22 @@ func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, 4096)
 	var req authLoginRequest
 	if err := decodeJSONBody(r, &req); err != nil {
 		writeAPIError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
 		return
 	}
+	release, ok := s.acquirePasswordSlot(w)
+	if !ok {
+		return
+	}
+	defer release()
 	if !s.validManagementCredentials(req.Username, req.Password) {
+		if account, exists := s.accountByUsername(req.Username); exists && authn.VerifyPassword(account.PasswordHash, req.Password) {
+			s.finishAccountLogin(w, r, account, http.StatusOK)
+			return
+		}
 		s.appendLog("management login rejected from " + s.clientHost(r))
 		writeAPIError(w, http.StatusUnauthorized, "INVALID_CREDENTIALS", "username or password is incorrect")
 		return
@@ -142,24 +174,26 @@ func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusInternalServerError, "SESSION_FAILED", "could not create management session")
 		return
 	}
-	http.SetCookie(w, &http.Cookie{
-		Name:     managementSessionCookie,
-		Value:    sessionValue,
-		Path:     "/",
-		Expires:  expiresAt,
-		MaxAge:   int(managementSessionTTL.Seconds()),
-		HttpOnly: true,
-		Secure:   s.requestUsesHTTPS(r),
-		SameSite: http.SameSiteStrictMode,
-	})
+	s.setSessionCookie(w, r, sessionValue, expiresAt)
 	s.appendLog("management login accepted from " + s.clientHost(r))
 	writeJSON(w, http.StatusOK, authSessionResponse{
-		OK:            true,
-		Required:      true,
-		Configured:    true,
-		Authenticated: true,
-		ExpiresAt:     expiresAt.UTC().Format(time.RFC3339),
-		CSRFToken:     s.managementCSRFToken(sessionValue),
+		OK:                  true,
+		Required:            true,
+		Configured:          true,
+		Authenticated:       true,
+		ExpiresAt:           expiresAt.UTC().Format(time.RFC3339),
+		CSRFToken:           s.managementCSRFToken(sessionValue),
+		RegistrationEnabled: s.registrationEnabled(),
+		Username:            s.managementUsername(),
+		Role:                "admin",
+	})
+}
+
+func (s *Server) setSessionCookie(w http.ResponseWriter, r *http.Request, value string, expiresAt time.Time) {
+	http.SetCookie(w, &http.Cookie{
+		Name: managementSessionCookie, Value: value, Path: "/", Expires: expiresAt,
+		MaxAge: int(managementSessionTTL.Seconds()), HttpOnly: true,
+		Secure: s.requestUsesHTTPS(r), SameSite: http.SameSiteStrictMode,
 	})
 }
 
@@ -265,7 +299,10 @@ func (s *Server) managementCSRFToken(sessionValue string) string {
 func (s *Server) validManagementCSRF(r *http.Request) bool {
 	sessionValue, _, ok := s.managementSession(r)
 	if !ok {
-		return false
+		_, sessionValue, _, ok = s.userSession(r)
+		if !ok {
+			return false
+		}
 	}
 	provided := strings.TrimSpace(r.Header.Get(managementCSRFHeader))
 	return provided != "" && constantTimeEqual(provided, s.managementCSRFToken(sessionValue))

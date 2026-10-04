@@ -362,6 +362,22 @@ func TestPositiveIntEnvironmentOverrides(t *testing.T) {
 	}
 }
 
+func TestRegistrationEnvironmentOverride(t *testing.T) {
+	t.Setenv("SUBCONV_REGISTRATION_ENABLED", "false")
+	overrides, err := serveOverridesFromEnvAndFlags(map[string]bool{}, serveOverrides{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := model.DefaultConfig()
+	if err := applyServeOverrides(&cfg, overrides); err != nil || cfg.Service.RegistrationEnabled {
+		t.Fatal("explicitly disabled registration was not applied")
+	}
+	t.Setenv("SUBCONV_REGISTRATION_ENABLED", "invalid")
+	if _, err := serveOverridesFromEnvAndFlags(map[string]bool{}, serveOverrides{}); err == nil {
+		t.Fatal("invalid registration setting was accepted")
+	}
+}
+
 func TestPositiveIntEnvironmentOverridesAreOptional(t *testing.T) {
 	got, err := serveOverridesFromEnvAndFlags(map[string]bool{}, serveOverrides{})
 	if err != nil {

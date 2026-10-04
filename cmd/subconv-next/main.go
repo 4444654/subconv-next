@@ -47,6 +47,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	case "version":
 		_, _ = fmt.Fprintln(stdout, version)
 		return 0
+	case "features":
+		_ = json.NewEncoder(stdout).Encode(map[string]bool{"account_login": true, "registration": true})
+		return 0
 	case "hash-password":
 		return runHashPassword(args[1:], os.Stdin, stdout, stderr)
 	case "serve":
@@ -76,6 +79,7 @@ func printUsage(w io.Writer) {
 	_, _ = fmt.Fprintln(w, "  parse       Parse subscription content into NodeIR")
 	_, _ = fmt.Fprintln(w, "  backup      Export, inspect, or restore application backups")
 	_, _ = fmt.Fprintln(w, "  version     Print the build version")
+	_, _ = fmt.Fprintln(w, "  features    Print supported features as JSON")
 	_, _ = fmt.Fprintln(w, "  hash-password  Hash a web login password read from standard input")
 }
 
@@ -295,6 +299,7 @@ type serveOverrides struct {
 	accessToken            string
 	managementUsername     string
 	managementPasswordHash string
+	registrationEnabled    *bool
 	publicConverter        *bool
 	trustProxyHeaders      *bool
 	allowInsecurePublic    *bool
@@ -327,6 +332,10 @@ func serveOverridesFromEnvAndFlags(explicitFlags map[string]bool, flags serveOve
 	if err != nil {
 		return serveOverrides{}, err
 	}
+	registrationEnabled, err := boolOverrideFromEnv("SUBCONV_REGISTRATION_ENABLED")
+	if err != nil {
+		return serveOverrides{}, err
+	}
 	trustProxyHeaders, err := boolOverrideFromEnv("SUBCONV_TRUST_PROXY_HEADERS")
 	if err != nil {
 		return serveOverrides{}, err
@@ -356,6 +365,7 @@ func serveOverridesFromEnvAndFlags(explicitFlags map[string]bool, flags serveOve
 		accessToken:            strings.TrimSpace(os.Getenv("SUBCONV_ACCESS_TOKEN")),
 		managementUsername:     strings.TrimSpace(os.Getenv("SUBCONV_MANAGEMENT_USERNAME")),
 		managementPasswordHash: strings.TrimSpace(os.Getenv("SUBCONV_MANAGEMENT_PASSWORD_HASH")),
+		registrationEnabled:    registrationEnabled,
 		publicConverter:        publicConverter,
 		trustProxyHeaders:      trustProxyHeaders,
 		allowInsecurePublic:    allowInsecurePublic,
@@ -452,6 +462,9 @@ func applyServeOverrides(cfg *model.Config, overrides serveOverrides) error {
 	}
 	if overrides.publicConverter != nil {
 		cfg.Service.PublicConverter = *overrides.publicConverter
+	}
+	if overrides.registrationEnabled != nil {
+		cfg.Service.RegistrationEnabled = *overrides.registrationEnabled
 	}
 	if overrides.trustProxyHeaders != nil {
 		cfg.Service.TrustProxyHeaders = *overrides.trustProxyHeaders

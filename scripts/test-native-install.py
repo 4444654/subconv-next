@@ -84,11 +84,11 @@ prepare_binary() {
         result = subprocess.run(["bash", str(self.manager)], input="0\n", env=self.env,
                                 text=True, capture_output=True)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("管理 v1.3.2", result.stdout)
+        self.assertIn("管理 v1.4.0", result.stdout)
         result = subprocess.run(["bash", str(self.manager)], input="bad\n\n0\n",
                                 env=self.env, text=True, capture_output=True)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertGreaterEqual(result.stdout.count("管理 v1.3.2"), 2)
+        self.assertGreaterEqual(result.stdout.count("管理 v1.4.0"), 2)
 
     def test_stream_execution_saves_manager_even_if_download_fails(self):
         source = self.script.read_text()
@@ -156,6 +156,23 @@ prepare_binary() {
         self.assertFalse(marker.exists())
         self.run_shell('env_set SUBCONV_PUBLIC_BASE_URL "https://example.com/a?x=1&y=2"')
         self.assertIn("SUBCONV_PUBLIC_BASE_URL=https://example.com/a?x=1&y=2", self.env_file.read_text())
+
+    def test_registration_toggle_preserves_settings_and_rolls_back(self):
+        self.install()
+        original = self.env_file.read_bytes()
+        self.run_shell("main registration off")
+        self.assertIn("SUBCONV_REGISTRATION_ENABLED=false\n", self.env_file.read_text())
+        before = [line for line in original.decode().splitlines()
+                  if not line.startswith("SUBCONV_REGISTRATION_ENABLED=")]
+        after = [line for line in self.env_file.read_text().splitlines()
+                 if not line.startswith("SUBCONV_REGISTRATION_ENABLED=")]
+        self.assertEqual(before, after)
+        disabled = self.env_file.read_bytes()
+        self.run_shell("main registration invalid", expected=1)
+        self.assertEqual(self.env_file.read_bytes(), disabled)
+        (self.root / "fail-health").touch()
+        self.run_shell("main registration on", expected=1)
+        self.assertEqual(self.env_file.read_bytes(), disabled)
 
     def test_proxy_url_change_preserves_credentials_and_rolls_back_on_failure(self):
         self.install()

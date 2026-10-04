@@ -6,6 +6,8 @@ SubConv Next 是面向 Mihomo / Clash Meta 的自托管订阅转换工具。单�
 
 Docker 是推荐的部署方式。项目也包含基于 procd、UCI、rpcd、ACL 和 LuCI JavaScript View 的原生 OpenWrt 集成。
 
+当前分支支持登录页 **注册账号**，注册后自动登录，用户工作区、订阅和本机草稿按账号隔离。更新原生安装后即可使用；服务器可执行 `scn registration off` 关闭注册。详见 [前端注册说明](registration.md)。
+
 ## 功能特性
 
 - 聚合多个订阅源，使用稳定来源 ID、名称和可选 Emoji 前缀。

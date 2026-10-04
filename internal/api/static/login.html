@@ -29,10 +29,15 @@
               <rect x="4" y="10" width="16" height="11" rx="2"></rect>
               <path d="M8 10V7a4 4 0 0 1 8 0v3"></path>
             </svg>
-            管理端
+            账号中心
           </span>
-          <h1 id="login-title">登录管理后台</h1>
-          <p>仅限授权管理人员访问。</p>
+          <h1 id="login-title">登录 SubConv Next</h1>
+          <p id="login-description">登录后开始转换和管理你的订阅。</p>
+        </div>
+
+        <div class="auth-switch" role="group" aria-label="登录或注册">
+          <button id="login-mode" type="button" aria-pressed="true" disabled>登录</button>
+          <button id="register-mode" type="button" aria-pressed="false" hidden disabled>注册账号</button>
         </div>
 
         <form id="login-form" novalidate>
@@ -55,6 +60,13 @@
               </svg>
             </button>
           </div>
+          <div id="confirm-password-field" class="confirm-password-field" hidden>
+            <label for="confirm-password">确认密码</label>
+            <div class="password-control username-control">
+              <input id="confirm-password" name="confirm_password" type="password" autocomplete="new-password" disabled />
+            </div>
+          </div>
+          <p id="register-help" class="register-help" hidden>账号为 3–64 位英文字母、数字或 _ . @ -；密码为 8–72 字节。注册后自动登录。</p>
           <p id="login-message" class="login-message" role="alert" aria-live="polite"></p>
           <button id="login-submit" class="login-submit" type="submit" disabled>
             <span>登录</span>

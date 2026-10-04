@@ -28,6 +28,7 @@ type publishedMeta struct {
 	AccessCount      int                            `json:"access_count"`
 	Revoked          bool                           `json:"revoked"`
 	WorkspaceHash    string                         `json:"workspace_hash,omitempty"`
+	OwnerID          string                         `json:"owner_id,omitempty"`
 	RotatedAt        time.Time                      `json:"rotated_at,omitempty"`
 	OutputFilename   string                         `json:"output_filename,omitempty"`
 	SubscriptionInfo *publishedSubscriptionUserinfo `json:"subscription_userinfo,omitempty"`
@@ -121,7 +122,11 @@ func (s *Server) createPublished(workspaceHash string) (publishedRef, error) {
 	s.publishedCreateMu.Lock()
 	defer s.publishedCreateMu.Unlock()
 
-	if s.snapshotConfig().Service.PublicConverter && s.maxPublications > 0 {
+	owned := false
+	if ref, err := s.loadWorkspaceByHash(workspaceHash); err == nil {
+		owned = ref.Meta.OwnerID != ""
+	}
+	if (s.snapshotConfig().Service.PublicConverter || owned) && s.maxPublications > 0 {
 		count, err := s.activePublicationCount()
 		if err != nil {
 			return publishedRef{}, err
@@ -185,6 +190,9 @@ func (s *Server) createPublishedWithToken(workspaceHash, publishID, token string
 		CreatedAt:     now,
 		UpdatedAt:     now,
 		WorkspaceHash: strings.TrimSpace(workspaceHash),
+	}
+	if workspace, err := s.loadWorkspaceByHash(workspaceHash); err == nil {
+		ref.Meta.OwnerID = workspace.Meta.OwnerID
 	}
 	if err := os.MkdirAll(ref.Dir, 0o700); err != nil {
 		return publishedRef{}, fmt.Errorf("create published dir: %w", err)

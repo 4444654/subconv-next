@@ -33,6 +33,7 @@ services:
       # Available in this fork's account-enabled binary (build the local image).
       SUBCONV_MANAGEMENT_USERNAME: ${SUBCONV_MANAGEMENT_USERNAME:-admin}
       SUBCONV_MANAGEMENT_PASSWORD_HASH: ${SUBCONV_MANAGEMENT_PASSWORD_HASH:-}
+      SUBCONV_REGISTRATION_ENABLED: ${SUBCONV_REGISTRATION_ENABLED:-true}
       # Public converter mode keeps random workspace isolation and rate limits
       # while removing login from the normal browser workflow.
       SUBCONV_PUBLIC_CONVERTER: ${SUBCONV_PUBLIC_CONVERTER:-false}

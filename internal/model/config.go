@@ -53,6 +53,7 @@ type ServiceConfig struct {
 	SubscriptionToken                string `json:"subscription_token,omitempty"`
 	ManagementUsername               string `json:"management_username,omitempty"`
 	ManagementPasswordHash           string `json:"management_password_hash,omitempty"`
+	RegistrationEnabled              bool   `json:"registration_enabled"`
 	PublicConverter                  bool   `json:"public_converter,omitempty"`
 	TrustProxyHeaders                bool   `json:"trust_proxy_headers,omitempty"`
 	AllowInsecurePublic              bool   `json:"allow_insecure_public,omitempty"`
@@ -313,6 +314,7 @@ func DefaultServiceConfig() ServiceConfig {
 		MaxWorkspaces:                   DefaultMaxWorkspaces,
 		MaxPublications:                 DefaultMaxPublications,
 		MaxConcurrentRefreshes:          DefaultMaxRefreshWorkers,
+		RegistrationEnabled:             true,
 	}
 }
 
