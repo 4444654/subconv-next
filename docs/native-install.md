@@ -1,6 +1,6 @@
 # Debian / Ubuntu 原生一键安装
 
-适用于使用 systemd 的 Debian / Ubuntu VPS，支持 x86_64（amd64）和 aarch64（arm64），不需要 Docker。安装器版本：**1.3.0**。
+适用于使用 systemd 的 Debian / Ubuntu VPS，支持 x86_64（amd64）和 aarch64（arm64），不需要 Docker。安装器版本：**1.3.1**。
 
 ## 安装
 
@@ -37,6 +37,14 @@ scn
 ```
 
 `scn` 是安装器生成的程序，不需要另装“命令执行工具”。下载中断后也可以使用 `scn install` 重试。若安装器尚未开始运行、管理器也未生成，重新执行上面的安装命令。
+
+菜单按“服务管理、账号管理、访问设置、安装维护”分组，每个选项单独一行，编号 1–14，输入 0 退出。仅刷新已有安装的菜单时，下载当前脚本并运行 `menu-update`：
+
+```bash
+curl -fL --retry 2 https://raw.githubusercontent.com/4444654/subconv-next/main/subconv-next-onekey.sh -o /tmp/subconv-next-onekey.sh && bash /tmp/subconv-next-onekey.sh menu-update
+```
+
+此命令保存最新管理器；再次输入 `scn` 打开新版菜单。
 
 默认监听 `127.0.0.1:9876`，远程电脑不能直接用服务器 IP 访问。已有 Caddy 可将域名反代到 `127.0.0.1:9876`，再执行 `scn url https://你的域名`。需用服务器 IP 和端口访问时执行：
 

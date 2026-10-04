@@ -84,11 +84,11 @@ prepare_binary() {
         result = subprocess.run(["bash", str(self.manager)], input="0\n", env=self.env,
                                 text=True, capture_output=True)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("管理 v1.3.0", result.stdout)
+        self.assertIn("管理 v1.3.1", result.stdout)
         result = subprocess.run(["bash", str(self.manager)], input="bad\n\n0\n",
                                 env=self.env, text=True, capture_output=True)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertGreaterEqual(result.stdout.count("管理 v1.3.0"), 2)
+        self.assertGreaterEqual(result.stdout.count("管理 v1.3.1"), 2)
 
     def test_stream_execution_saves_manager_even_if_download_fails(self):
         source = self.script.read_text()

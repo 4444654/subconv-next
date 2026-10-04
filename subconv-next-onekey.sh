@@ -2,7 +2,7 @@
 # SubConv Next 原生安装与管理；Debian / Ubuntu amd64 / arm64，无需 Docker。
 set -Eeuo pipefail
 
-SCRIPT_VERSION="1.3.0"
+SCRIPT_VERSION="1.3.1"
 SOURCE_REPO="4444654/subconv-next"
 UPSTREAM_REPO="Earl9/subconv-next"
 BIN="/usr/local/bin/subconv-next"
@@ -473,15 +473,15 @@ menu_action() {
     3) main stop ;;
     4) main restart ;;
     5) main logs ;;
-    6) main token ;;
-    7) main reset-token ;;
-    8) read -r -p '请输入端口 [1-65535]：' value; main port "$value" ;;
-    9) if [[ $(env_get SUBCONV_HOST) == 0.0.0.0 ]]; then main bind local; else main bind public; fi ;;
-    10) read -r -p '公网地址（留空清除）：' value; main url "$value" ;;
-    11) main update ;;
-    12) main repair ;;
-    13) main uninstall ;;
-    14) main account ;;
+    6) main account ;;
+    7) main token ;;
+    8) main reset-token ;;
+    9) read -r -p '请输入端口 [1-65535]：' value; main port "$value" ;;
+    10) if [[ $(env_get SUBCONV_HOST) == 0.0.0.0 ]]; then main bind local; else main bind public; fi ;;
+    11) read -r -p '公网地址（留空清除）：' value; main url "$value" ;;
+    12) main update ;;
+    13) main repair ;;
+    14) main uninstall ;;
     *) warn "无效选择。" ;;
   esac
 }
@@ -489,12 +489,27 @@ menu_action() {
 menu() {
   local choice
   while true; do
-    printf '\n====== SubConv Next 管理 v%s ======\n' "$SCRIPT_VERSION"
-    printf '1. 状态     2. 启动     3. 停止     4. 重启\n'
-    printf '5. 日志     6. Token    7. 重置 Token\n'
-    printf '8. 端口     9. 本机/公网监听    10. 公网域名\n'
-    printf '11. 安装/更新    12. 修复    13. 卸载    14. 设置账号密码    0. 退出\n'
-    read -r -p '请选择：' choice || return 0
+    printf '\n  SubConv Next 管理 v%s\n\n' "$SCRIPT_VERSION"
+    printf '  服务管理\n'
+    printf '   1. 查看服务状态\n'
+    printf '   2. 启动服务\n'
+    printf '   3. 停止服务\n'
+    printf '   4. 重启服务\n'
+    printf '   5. 查看运行日志\n\n'
+    printf '  账号管理\n'
+    printf '   6. 设置登录账号和密码\n'
+    printf '   7. 查看 API Token\n'
+    printf '   8. 重置 API Token\n\n'
+    printf '  访问设置\n'
+    printf '   9. 修改监听端口\n'
+    printf '  10. 切换本机 / 公网访问\n'
+    printf '  11. 设置公网地址\n\n'
+    printf '  安装维护\n'
+    printf '  12. 安装 / 更新程序\n'
+    printf '  13. 修复服务\n'
+    printf '  14. 卸载程序\n\n'
+    printf '   0. 退出菜单\n\n'
+    read -r -p '请输入选项 [0-14]：' choice || return 0
     [[ "$choice" != 0 ]] || return 0
     # 每次操作使用独立进程，失败或中断日志不会退出整个菜单。
     bash "$MANAGER" _menu_action "$choice" || warn "操作未完成，可查看提示后重试。"
@@ -513,6 +528,7 @@ usage() {
   logs               最近 100 行日志并持续跟随，Ctrl+C 结束
   token / reset-token
   account            设置网页登录账号和独立密码（忘记密码时也可使用）
+  menu-update        将当前脚本保存为 scn 管理菜单
   port 9876          修改端口
   bind local|public  切换本机/公网监听
   url https://sub.example.com   设置公网基础地址
@@ -536,6 +552,7 @@ main() {
   case "$action" in
     install|update) install_app ;;
     repair) repair_app ;;
+    menu-update) write_manager; info "管理菜单已更新。输入 scn 打开新版菜单。" ;;
     _menu_action) menu_action "${2:-}" ;;
     status) need_install; systemctl --no-pager -l status "$SERVICE" || true; show_access ;;
     start|restart) need_install; lock_operation; systemctl "$action" "$SERVICE"; health_check || die "健康检查失败，请查看 scn logs。"; show_access ;;
