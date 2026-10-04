@@ -48,6 +48,18 @@ Supported protocols include `ss`, `ssr`, `vmess`, `vless`, `trojan`, `hysteria2`
 
 ## Quick Start
 
+### Debian / Ubuntu (no Docker)
+
+Run as root on an amd64 or arm64 VPS using systemd:
+
+```bash
+curl -fL --retry 2 https://raw.githubusercontent.com/4444654/subconv-next/main/subconv-next-onekey.sh -o /tmp/subconv-next-onekey.sh && bash /tmp/subconv-next-onekey.sh
+```
+
+If curl is missing, run `apt-get update && apt-get install -y curl ca-certificates` first. The installer creates the persistent `scn` management command before downloading the application, verifies release checksums, and falls back to building this repository from source when releases are unavailable. It enables systemd startup and checks service health; failed updates restore the previous binary and settings.
+
+Run `scn` to open the Chinese management menu. The default listener is `127.0.0.1:9876`; use a reverse proxy or run `scn bind public` and allow the port in your firewall for direct IP access. Run `scn token` to see the login token. See the [native installation guide (中文)](docs/native-install.md) for updates, recovery, paths, and troubleshooting.
+
 ### Docker Compose
 
 The repository includes a hardened [docker-compose.yml](docker-compose.yml). It initializes `/data` ownership for the unprivileged container user, mounts `/config` read-only, and publishes the web port on loopback by default.

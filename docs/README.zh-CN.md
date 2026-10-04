@@ -48,6 +48,18 @@ Docker 是推荐的部署方式。项目也包含基于 procd、UCI、rpcd、ACL
 
 ## 快速开始
 
+### Debian / Ubuntu 一键安装（无需 Docker）
+
+在使用 systemd 的 amd64 / arm64 VPS 中，以 root 执行：
+
+```bash
+curl -fL --retry 2 https://raw.githubusercontent.com/4444654/subconv-next/main/subconv-next-onekey.sh -o /tmp/subconv-next-onekey.sh && bash /tmp/subconv-next-onekey.sh
+```
+
+缺少 curl 时先执行 `apt-get update && apt-get install -y curl ca-certificates`。安装器自动补齐依赖、生成 `scn` 管理菜单、校验发布包；下载不可用时自动安装 Go 并从本仓库源码编译。安装成功后启用开机自启，更新失败恢复原程序与设置。
+
+以后输入 `scn` 打开中文菜单。默认仅监听 `127.0.0.1:9876`；可通过已有 Caddy 反代访问，或执行 `scn bind public` 并放行端口后使用 `http://服务器IP:9876/`。输入 `scn token` 查看登录 Token。完整说明见 [原生安装与故障排查](native-install.md)。
+
 ### Docker Compose
 
 仓库已提供加固后的 [docker-compose.yml](../docker-compose.yml)：自动初始化 `/data` 的非特权用户权限，`/config` 只读挂载，并默认只在本机回环地址发布 Web 端口。
