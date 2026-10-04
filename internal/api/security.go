@@ -134,7 +134,7 @@ func (s *Server) securityMiddleware(next http.Handler) http.Handler {
 			return
 		}
 		if authKind == managementAuthUserSession {
-			if !isPublicConverterPath(r.URL.Path) && r.URL.Path != "/api/auth/logout" {
+			if !isPublicConverterPath(r.URL.Path) && r.URL.Path != "/api/auth/logout" && r.URL.Path != "/api/auth/password" {
 				writeAPIError(w, http.StatusForbidden, "FORBIDDEN", "administrator access is required")
 				return
 			}
@@ -148,6 +148,10 @@ func (s *Server) securityMiddleware(next http.Handler) http.Handler {
 				if r.URL.Path == "/api/workspaces" && r.Method == http.MethodPost {
 					limit = anonymousWorkspaceRateLimit
 					class = "registered-workspace"
+				}
+				if r.URL.Path == "/api/auth/password" {
+					limit = anonymousWorkspaceRateLimit
+					class = "account-password"
 				}
 				if !limiter.allow(account.ID+"\x00"+class, limit, time.Now()) {
 					w.Header().Set("Retry-After", "60")
@@ -292,7 +296,7 @@ func (s *Server) allowAnonymousAPIRequest(limiter *requestRateLimiter, r *http.R
 
 func isPublicConverterPath(path string) bool {
 	switch path {
-	case "/", "/style.css", "/app.js", "/favicon.svg", "/favicon.ico",
+	case "/", "/style.css", "/app.js", "/account.js", "/favicon.svg", "/favicon.ico",
 		"/api/status", "/api/workspaces", "/api/published", "/api/config",
 		"/api/site-logo", "/api/subscription-meta", "/api/audit",
 		"/api/preview-yaml", "/api/validate-output", "/api/nodes",

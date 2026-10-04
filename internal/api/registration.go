@@ -22,10 +22,12 @@ import (
 const maxRegisteredAccounts = 256
 
 type registeredAccount struct {
-	ID           string    `json:"id"`
-	Username     string    `json:"username"`
-	PasswordHash string    `json:"password_hash"`
-	CreatedAt    time.Time `json:"created_at"`
+	ID             string    `json:"id"`
+	Username       string    `json:"username"`
+	PasswordHash   string    `json:"password_hash"`
+	CreatedAt      time.Time `json:"created_at"`
+	Disabled       bool      `json:"disabled,omitempty"`
+	SessionVersion uint64    `json:"session_version,omitempty"`
 }
 
 type accountStore struct {
@@ -149,15 +151,23 @@ func (s *Server) createAccount(username, password string) (registeredAccount, er
 		next[key] = existing
 	}
 	next[key] = account
+	if err := s.saveAccountsLocked(next); err != nil {
+		return registeredAccount{}, err
+	}
+	return account, nil
+}
+
+// Caller holds accountsMu. Publish memory changes only after durable storage succeeds.
+func (s *Server) saveAccountsLocked(next map[string]registeredAccount) error {
 	data, err := json.MarshalIndent(accountStore{Version: 1, Accounts: next}, "", "  ")
 	if err != nil {
-		return registeredAccount{}, err
+		return err
 	}
 	if err := storage.AtomicWriteFile(filepath.Join(s.baseDataDir(), "accounts.json"), append(data, '\n'), 0o600); err != nil {
-		return registeredAccount{}, err
+		return err
 	}
 	s.accounts = next
-	return account, nil
+	return nil
 }
 
 func (s *Server) acquirePasswordSlot(w http.ResponseWriter) (func(), bool) {
@@ -228,6 +238,9 @@ func (s *Server) handleAuthRegister(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) userSignature(account registeredAccount, payload string) string {
+	if account.SessionVersion != 0 {
+		payload = "revision\x00" + strconv.FormatUint(account.SessionVersion, 10) + "\x00" + payload
+	}
 	return s.managementSignature("registered-session\x00" + account.ID + "\x00" + account.PasswordHash + "\x00" + payload)
 }
 
@@ -238,7 +251,11 @@ func (s *Server) newUserSession(account registeredAccount) (string, time.Time, e
 	}
 	expiresAt := time.Now().UTC().Add(managementSessionTTL)
 	payload := "u." + account.ID + "." + strconv.FormatInt(expiresAt.Unix(), 10) + "." + base64.RawURLEncoding.EncodeToString(nonce)
-	return payload + "." + s.userSignature(account, payload), expiresAt, nil
+	signature := s.userSignature(account, payload)
+	if signature == "" {
+		return "", time.Time{}, errors.New("could not sign login session")
+	}
+	return payload + "." + signature, expiresAt, nil
 }
 
 func (s *Server) userSession(r *http.Request) (registeredAccount, string, time.Time, bool) {
@@ -260,7 +277,11 @@ func (s *Server) userSession(r *http.Request) (registeredAccount, string, time.T
 		return registeredAccount{}, "", time.Time{}, false
 	}
 	account, found := s.accountByID(parts[1])
-	if !found || !constantTimeEqual(parts[4], s.userSignature(account, strings.Join(parts[:4], "."))) {
+	if !found || account.Disabled {
+		return registeredAccount{}, "", time.Time{}, false
+	}
+	expected := s.userSignature(account, strings.Join(parts[:4], "."))
+	if expected == "" || !constantTimeEqual(parts[4], expected) {
 		return registeredAccount{}, "", time.Time{}, false
 	}
 	return account, cookie.Value, expiresAt, true
@@ -273,7 +294,7 @@ func (s *Server) finishAccountLogin(w http.ResponseWriter, r *http.Request, acco
 		return
 	}
 	s.setSessionCookie(w, r, sessionValue, expiresAt)
-	writeJSON(w, status, authSessionResponse{OK: true, Required: true, Configured: true, Authenticated: true, RegistrationEnabled: s.registrationEnabled(), Username: account.Username, UserID: account.ID, Role: "user", ExpiresAt: expiresAt.Format(time.RFC3339), CSRFToken: s.managementCSRFToken(sessionValue)})
+	writeJSON(w, status, authSessionResponse{Version: s.version, OK: true, Required: true, Configured: true, Authenticated: true, RegistrationEnabled: s.registrationEnabled(), Username: account.Username, UserID: account.ID, Role: "user", ExpiresAt: expiresAt.Format(time.RFC3339), CSRFToken: s.managementCSRFToken(sessionValue)})
 }
 
 func (s *Server) registeredAccountForRequest(r *http.Request) (registeredAccount, bool) {

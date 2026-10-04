@@ -13,8 +13,8 @@ import (
 	"time"
 )
 
-const defaultLatestReleaseURL = "https://api.github.com/repos/Earl9/subconv-next/releases/latest"
-const defaultLatestReleasePageURL = "https://github.com/Earl9/subconv-next/releases/latest"
+const defaultLatestReleaseURL = "https://api.github.com/repos/4444654/subconv-next/releases/latest"
+const defaultLatestReleasePageURL = "https://github.com/4444654/subconv-next/releases/latest"
 
 var latestReleaseURL = defaultLatestReleaseURL
 var latestReleasePageURL = defaultLatestReleasePageURL

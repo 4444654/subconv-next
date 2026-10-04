@@ -65,21 +65,17 @@ Codex 优先保证路线 B 可用。
 - build linux amd64/arm64/armv7/mipsle
 - upload artifacts
 
-### Manual Release
+### 发布版本
 
-`.github/workflows/auto-release.yml` 仅通过 GitHub Actions 的 `workflow_dispatch` 手动发布。运行时必须明确填写 `release_version`，格式为 `1.0.N`：
+版本号统一保存在 `internal/buildinfo/VERSION`，当前为 `1.5.0`。普通 `go build`、原生源码安装、网页显示和 GitHub Release 构建都使用该版本；显式的 `-X main.version=...` 仍可用于指定构建版本。
 
-- 用该版本号构建 Linux 多架构二进制。
-- 使用仓库内 portable `ipkg-build` 打包 `aarch64_generic` all-in-one OpenWrt IPK，不需要配置 OpenWrt SDK URL。
-- 推送 Docker 镜像到 GHCR：`latest` 和当前版本 tag。GHCR 推送失败不会阻断 GitHub Release 和 OpenWrt IPK 上传。
-- 先创建 Draft Release 并上传二进制、OpenWrt IPK 与 `checksums.txt`，再发布 Release，由 GitHub 创建并锁定 tag。
+`.github/workflows/auto-release.yml` 在 `main` 的版本文件发生变化时自动发布。也可在 [Actions 发布工作流](https://github.com/4444654/subconv-next/actions/workflows/auto-release.yml) 手动选择 **Run workflow**；版本输入可留空，填写时必须与版本文件一致，格式为 `主版本.次版本.修订号`。Fork 仓库若尚未开启 Actions，应先在 Actions 页面启用工作流，再手动运行首次发布。
 
-GHCR 默认使用 `GITHUB_TOKEN` 推送，并在镜像中写入 `org.opencontainers.image.source` 以关联当前仓库。如果 GHCR 返回 `permission_denied: write_package`，需要在 package 设置中给当前仓库 Actions 写入权限，或配置 repository secrets。GHCR 推送失败时，Release 构建和上传仍会继续。
+发布流程先进行 Go、原生安装器和前端交互回归检查，再构建 Linux 多架构二进制、portable OpenWrt IPK 与 SHA-256 校验清单。先创建草稿并上传所有资源，再公开 Release，避免安装器获取未上传完成的发布。已有 Release 或 tag 会阻止覆盖，下一次发布应递增版本文件。
 
-- `GHCR_USERNAME`：PAT 所属 GitHub 用户名，可省略并默认使用 `github.actor`。
-- `GHCR_TOKEN`：classic PAT，至少包含 `write:packages` 权限。
+GHCR 镜像推送使用 `GITHUB_TOKEN`；镜像发布失败不会阻断原生二进制和 IPK 发布。可选配置 `GHCR_USERNAME` 与具有 `write:packages` 的 `GHCR_TOKEN`。已发布的不可变 tag 不能复用。
 
-启用 GitHub Immutable Releases 后，已发布的 tag 名称即使删除也不能复用。发布前必须选择从未被不可变 Release 使用过的新版本号；普通 `main` 提交只运行 CI，不触发发布。
+网页更新检查和原生安装器只使用 [本仓库 Releases](https://github.com/4444654/subconv-next/releases)。当前仓库没有兼容发布包时，原生安装器自动编译源码；不使用缺少账号管理功能的旧上游二进制。
 
 ## Release Artifacts
 
@@ -97,18 +93,4 @@ checksums.txt
 
 ## 版本命名
 
-```text
-v0.1.0
-```
-
-CLI 输出：
-
-```sh
-subconv-next version
-```
-
-结果：
-
-```text
-subconv-next version 0.1.0 commit <sha> built <date>
-```
+Release 使用 `v1.5.0` 这样的 tag；CLI `subconv-next version` 输出 `1.5.0`。后续发布修改版本文件，例如 `1.5.1`，提交到 `main` 后触发工作流。

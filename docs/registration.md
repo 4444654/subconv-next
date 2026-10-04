@@ -32,6 +32,14 @@ scn registration on
 - 工作区继续采用隐私会话模式；刷新页面会创建新工作区。需要下次恢复的配置请保存本机草稿或导出。
 - 普通用户受公开转换的来源数量、内容大小、私有网络访问、TLS 验证和抓取并发限制，不提供服务器管理权限。
 
+## 网页用户管理与修改密码
+
+管理员登录后，网页顶部显示 **用户管理**，列表包含所有注册账号的名称、注册时间和状态。管理员可以停用或启用账号、重置用户密码；列表不会返回密码哈希或会话签名。停用账号和重置密码会使该用户的旧会话立即失效；重新启用后必须重新登录。配置和已发布订阅保留，现有订阅下载链接继续可用。
+
+普通用户登录后，网页顶部显示 **修改密码**。输入当前密码和两次新密码后，当前浏览器取得新的会话，其他浏览器的旧会话失效。修改密码不改变账号名、配置或订阅链接。
+
+**管理员账号和密码只能在服务器脚本菜单第 6 项或 `scn account` 设置。** 网页不提供管理员凭据修改、创建管理员或将普通用户提升为管理员的功能，接口也拒绝管理员通过网页修改密码。脚本拒绝把已有注册用户名设置成管理员名。
+
 ## 存储与接口
 
 账号持久化于数据目录下的 `accounts.json`（原生安装为 `/var/lib/subconv-next/accounts.json`）。文件权限为 `0600`，保存 bcrypt 哈希，不保存明文密码；重启和安装更新保留账号。账号上限为 256，注册限制为每个来源每分钟 6 次、全局每分钟 20 次，密码哈希处理最多同时 4 个。
@@ -48,11 +56,25 @@ scn registration on
 
 成功返回 `201`、登录 Cookie、`role: "user"`、`user_id` 和 `csrf_token`。重复账号返回 `409`；无效输入返回 `400`；关闭注册返回 `403`；限流或账号已满返回 `429`。`GET /api/auth/session` 同时返回 `registration_enabled` 和已登录账号的身份；`POST /api/auth/login` 继续使用 `username`、`password`。用户通过 Cookie 登录后的写操作必须带会话对应的 `X-SubConv-CSRF` 请求头。
 
+新增账号接口；前三项仅管理员可用，普通用户访问返回 `403`：
+
+| 接口 | 用途 |
+| --- | --- |
+| `GET /api/users` | 获取全部注册账号摘要与容量上限 |
+| `PATCH /api/users/{user_id}` | `{"disabled":true}` 停用；`false` 启用 |
+| `POST /api/users/{user_id}/password` | `new_password`、`confirm_password` 重置用户密码 |
+| `POST /api/auth/password` | 普通用户提交 `current_password`、`new_password`、`confirm_password` 修改自身密码；管理员返回 `403 ADMINISTRATOR_SCRIPT_ONLY` |
+
+账号文件保持版本 1，旧账号缺少 `disabled` 和 `session_version` 字段时仍能正常加载；状态或密码变化后递增会话版本并持久化，避免旧 Cookie 在账号重新启用后恢复有效。
+
 ## 验证
 
 ```bash
 go test ./...
-go test -race ./internal/api -run 'TestRegistration|TestRegistered|TestConcurrentRegistration'
+go test -race ./internal/api
 python3 scripts/test-native-install.py
 node scripts/test-auth-ui.js
+node scripts/test-user-ui.js
+go build -o /tmp/scn-account-http-binary ./cmd/subconv-next
+python3 scripts/test-account-http.py /tmp/scn-account-http-binary
 ```

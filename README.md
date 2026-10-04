@@ -60,7 +60,7 @@ If curl is missing, run `apt-get update && apt-get install -y curl ca-certificat
 
 Run `scn` to open the Chinese management menu. The default listener is `127.0.0.1:9876`; use a reverse proxy or run `scn bind public` and allow the port in your firewall for direct IP access. Sign in with username `admin` and the initial password shown by `scn token`. Run `scn account` to set your own username and an independent, bcrypt-hashed web password while preserving API tokens and subscriptions. Existing installations should rerun the installer above to upgrade both the binary and manager. See the [native installation guide (中文)](docs/native-install.md) for updates, recovery, paths, and troubleshooting.
 
-The login page also includes **注册账号** for self-service signup. New accounts receive isolated converter workspaces, publications and browser drafts. Registration opens by default after the administrator is configured; use `scn registration off` to close signup while retaining existing logins. See [registration and permissions](docs/registration.md).
+The login page also includes **注册账号** for self-service signup. New accounts receive isolated converter workspaces, publications and browser drafts. Registration opens by default after the administrator is configured; use `scn registration off` to close signup while retaining existing logins. Administrators can open **用户管理** in the web header to list registered accounts, disable/enable accounts and reset user passwords. Ordinary users can change their own passwords. Administrator credentials can only be set through `scn account` (menu 6). See [registration and permissions](docs/registration.md).
 
 ### Docker Compose
 
@@ -113,7 +113,7 @@ When UCI option `enabled` is `1`, installation enables and starts the service. T
 
 ## Downloads
 
-Release artifacts are published through [GitHub Releases](https://github.com/Earl9/subconv-next/releases) and are not committed to the repository. Assets include Linux binaries, OpenWrt IPKs, the LuCI package, and `checksums.txt`.
+Release artifacts are published through [GitHub Releases](https://github.com/4444654/subconv-next/releases) and are not committed to the repository. The release workflow builds Linux binaries, an all-in-one OpenWrt IPK and `checksums.txt`. Bumping `internal/buildinfo/VERSION` on `main` triggers a release; source builds use the same version. See [build and release instructions](docs/13-build-release-ci.md).
 
 ## Security
 

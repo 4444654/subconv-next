@@ -6442,3 +6442,22 @@ select:focus {
     padding-inline: 14px;
   }
 }
+
+/* Account settings and administrator user management. */
+.header-actions { flex-wrap: wrap; }
+.account-form > label { font-weight: 600; margin-top: 4px; }
+.account-form-message { padding: 10px 12px; color: var(--danger, #dc2626); background: rgba(220, 38, 38, .06); border-radius: 10px; overflow-wrap: anywhere; }
+.account-form-message[hidden] { display: none; }
+.users-dialog { width: min(760px, calc(100vw - 32px)); }
+.managed-users { display: grid; gap: 10px; max-height: 55vh; overflow-y: auto; }
+.managed-user-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 14px; border: 1px solid var(--border, #e2e8f0); border-radius: 12px; padding: 14px; }
+.managed-user-info { display: grid; gap: 5px; min-width: 0; }
+.managed-user-info strong { overflow-wrap: anywhere; }
+.managed-user-info span { color: var(--muted, #64748b); font-size: 12px; }
+.managed-user-status { color: #15803d; font-size: 13px; }
+.managed-user-status.disabled { color: #b45309; }
+.managed-user-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+@media (max-width: 600px) {
+  .managed-user-row { grid-template-columns: minmax(0, 1fr) auto; gap: 10px; }
+  .managed-user-actions { grid-column: 1 / -1; }
+}

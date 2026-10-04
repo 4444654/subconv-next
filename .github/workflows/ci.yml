@@ -11,14 +11,28 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: 1.25.x
+          go-version: 1.27.x
       - run: test -z "$(gofmt -l $(find . -path './.git' -prune -o -path './.tmpinspect' -prune -o -path './vendor' -prune -o -name '*.go' -print))"
       - run: go test ./...
       - run: go test -race ./...
       - run: go vet ./...
       - run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
       - run: GOOS=linux GOARCH=amd64 go build -o /tmp/subconv-next-amd64 ./cmd/subconv-next
+      - run: python3 scripts/test-account-http.py /tmp/subconv-next-amd64
       - run: GOOS=linux GOARCH=arm64 go build -o /tmp/subconv-next-arm64 ./cmd/subconv-next
+
+  native-and-ui:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: bash -n subconv-next-onekey.sh
+      - run: shellcheck subconv-next-onekey.sh
+      - run: sudo python3 scripts/test-native-install.py
+      - run: node --check internal/api/static/app.js && node --check internal/api/static/login.js && node --check internal/api/static/account.js
+      - run: node scripts/test-auth-ui.js && node scripts/test-user-ui.js
 
   docker:
     runs-on: ubuntu-latest

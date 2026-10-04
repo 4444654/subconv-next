@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Installer regressions in an isolated directory; no host service changes."""
 import os
+import hashlib
 from pathlib import Path
 import subprocess
 import tempfile
@@ -84,11 +85,11 @@ prepare_binary() {
         result = subprocess.run(["bash", str(self.manager)], input="0\n", env=self.env,
                                 text=True, capture_output=True)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("管理 v1.4.1", result.stdout)
+        self.assertIn("管理 v1.5.0", result.stdout)
         result = subprocess.run(["bash", str(self.manager)], input="bad\n\n0\n",
                                 env=self.env, text=True, capture_output=True)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertGreaterEqual(result.stdout.count("管理 v1.4.1"), 2)
+        self.assertGreaterEqual(result.stdout.count("管理 v1.5.0"), 2)
 
     def test_stream_execution_saves_manager_even_if_download_fails(self):
         source = self.script.read_text()
@@ -267,6 +268,43 @@ prepare_binary() {
         original = self.env_file.read_bytes()
         self.run_shell("main account", expected=1, input="operator\npassphrase123\notherpass123\n")
         self.assertEqual(self.env_file.read_bytes(), original)
+
+    def test_administrator_name_cannot_replace_registered_user(self):
+        self.install()
+        self.prepare_account_binary()
+        accounts = self.root / "var/lib/subconv-next/accounts.json"
+        accounts.write_text('{"version":1,"accounts":{"alice":{"username":"Alice"}}}\n')
+        original = self.env_file.read_bytes()
+        result = self.run_shell("main account", expected=1, input="ALICE\npassword123\npassword123\n")
+        self.assertIn("已被注册用户使用", result.stdout + result.stderr)
+        self.assertEqual(self.env_file.read_bytes(), original)
+        self.assertFalse((self.root / "password-stdin").exists())
+
+    def test_release_requires_user_management_and_password_change(self):
+        self.install()
+        binary = self.root / "release-fixture"
+        sums = self.root / "release-sums"
+        manifest = self.root / "release-manifest"
+        manifest.write_text('{"tag_name":"v1.5.0","assets":[{"name":"subconv-next-linux-amd64","browser_download_url":"https://github.com/4444654/subconv-next/releases/download/v1.5.0/binary"},{"name":"checksums.txt","browser_download_url":"https://github.com/4444654/subconv-next/releases/download/v1.5.0/checksums.txt"}]}')
+        for supported in (False, True):
+            features = '{"registration":true,"user_management":true,"password_change":true}' if supported else '{"registration":true}'
+            binary.write_text('#!/usr/bin/env bash\ncase "$1" in\nfeatures) echo \'%s\' ;;\n*) exit 0 ;;\nesac\n' % features)
+            sums.write_text(hashlib.sha256(binary.read_bytes()).hexdigest() + "  subconv-next-linux-amd64\n")
+            body = r'''
+check_system
+WORK_DIR=$(mktemp -d "$SCN_TEST_ROOT/release-work.XXXXXX")
+download() {
+ case "$1" in
+  */releases/latest) cp "$SCN_TEST_ROOT/release-manifest" "$2" ;;
+  */checksums.txt) cp "$SCN_TEST_ROOT/release-sums" "$2" ;;
+  */binary) cp "$SCN_TEST_ROOT/release-fixture" "$2" ;;
+  *) return 1 ;;
+ esac
+}
+release_binary "$SOURCE_REPO"
+test -x "$WORK_DIR/candidate"
+'''
+            self.run_shell(body, expected=0 if supported else 1)
 
 
 if __name__ == "__main__":

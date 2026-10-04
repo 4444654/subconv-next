@@ -224,7 +224,7 @@ func TestHandleUpdateCheck(t *testing.T) {
 			t.Fatalf("release API path = %q, want /latest", r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"tag_name":"v0.2.0","name":"v0.2.0","html_url":"https://github.com/Earl9/subconv-next/releases/tag/v0.2.0","published_at":"2026-06-26T00:00:00Z"}`))
+		_, _ = w.Write([]byte(`{"tag_name":"v0.2.0","name":"v0.2.0","html_url":"https://github.com/4444654/subconv-next/releases/tag/v0.2.0","published_at":"2026-06-26T00:00:00Z"}`))
 	}))
 	defer releaseServer.Close()
 
@@ -267,8 +267,8 @@ func TestHandleUpdateCheckFallsBackToLatestRedirect(t *testing.T) {
 	pageServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/latest":
-			http.Redirect(w, r, "/Earl9/subconv-next/releases/tag/v0.2.0", http.StatusFound)
-		case "/Earl9/subconv-next/releases/tag/v0.2.0":
+			http.Redirect(w, r, "/4444654/subconv-next/releases/tag/v0.2.0", http.StatusFound)
+		case "/4444654/subconv-next/releases/tag/v0.2.0":
 			_, _ = w.Write([]byte("ok"))
 		default:
 			t.Fatalf("release page path = %q", r.URL.Path)
